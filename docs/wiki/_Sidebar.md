@@ -16,6 +16,7 @@
 * [Fullscreen and Maximize](./Fullscreen-and-Maximize.md)
 * [Window Effects](./Window-Effects.md)
 * [Packaging niri](./Packaging-niri.md)
+* [Tiri on NixOS](./Tiri-on-NixOS.md)
 * [Integrating niri](./Integrating-niri.md)
 * [Security Model](./Security-Model.md)
 * [Accessibility](./Accessibility.md)

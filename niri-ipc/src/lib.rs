@@ -275,6 +275,10 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(short = 'p', long, action = clap::ArgAction::Set, default_value_t = false))]
         show_pointer: bool,
 
+        /// Whether to show a desktop notification after capturing.
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        notify: bool,
+
         /// Path to save the screenshot to.
         ///
         /// The path must be absolute, otherwise an error is returned.

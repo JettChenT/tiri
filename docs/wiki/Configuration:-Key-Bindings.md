@@ -393,6 +393,14 @@ binds {
 }
 ```
 
+Tiri only: you can suppress the desktop notification after a window screenshot with `notify=false`.
+
+```kdl
+binds {
+    Alt+Print { screenshot-window notify=false; }
+}
+```
+
 #### `toggle-keyboard-shortcuts-inhibit`
 
 <sup>Since: 25.02</sup>

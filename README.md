@@ -14,6 +14,10 @@
 
 ## About
 
+This fork is published as **tiri** at <https://github.com/JettChenT/tiri>.
+It currently tracks niri with local changes, including a `notify` property for `screenshot-window` binds and IPC actions.
+For NixOS instructions that replace the raw nixpkgs `niri` package with this fork, see [Tiri on NixOS](docs/wiki/Tiri-on-NixOS.md).
+
 Windows are arranged in columns on an infinite strip going to the right.
 Opening a new window never causes existing windows to resize.
 

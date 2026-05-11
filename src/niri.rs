@@ -2024,7 +2024,10 @@ impl State {
         self.backend.with_primary_renderer(|renderer| {
             match self.niri.screenshot_ui.capture(renderer) {
                 Ok((size, pixels)) => {
-                    if let Err(err) = self.niri.save_screenshot(size, pixels, write_to_disk, path) {
+                    if let Err(err) =
+                        self.niri
+                            .save_screenshot(size, pixels, write_to_disk, path, true)
+                    {
                         warn!("error saving screenshot: {err:?}");
                     }
                 }
@@ -5568,7 +5571,7 @@ impl Niri {
             elements,
         )?;
 
-        self.save_screenshot(size, pixels, write_to_disk, path)
+        self.save_screenshot(size, pixels, write_to_disk, path, true)
             .context("error saving screenshot")
     }
 
@@ -5579,6 +5582,7 @@ impl Niri {
         mapped: &Mapped,
         write_to_disk: bool,
         show_pointer: bool,
+        notify: bool,
         path: Option<String>,
     ) -> anyhow::Result<()> {
         let _span = tracy_client::span!("Niri::screenshot_window");
@@ -5636,7 +5640,7 @@ impl Niri {
             elements,
         )?;
 
-        self.save_screenshot(geo.size, pixels, write_to_disk, path)
+        self.save_screenshot(geo.size, pixels, write_to_disk, path, notify)
             .context("error saving screenshot")
     }
 
@@ -5646,6 +5650,7 @@ impl Niri {
         pixels: Vec<u8>,
         write_to_disk: bool,
         path_arg: Option<String>,
+        notify: bool,
     ) -> anyhow::Result<()> {
         let path = write_to_disk
             .then(|| {
@@ -5731,9 +5736,12 @@ impl Niri {
                 debug!("not saving screenshot to disk");
             }
 
-            #[cfg(feature = "dbus")]
-            if let Err(err) = crate::utils::show_screenshot_notification(image_path.as_deref()) {
-                warn!("error showing screenshot notification: {err:?}");
+            if notify {
+                #[cfg(feature = "dbus")]
+                if let Err(err) = crate::utils::show_screenshot_notification(image_path.as_deref())
+                {
+                    warn!("error showing screenshot notification: {err:?}");
+                }
             }
 
             // Send screenshot completion event.

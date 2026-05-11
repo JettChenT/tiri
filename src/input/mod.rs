@@ -770,7 +770,7 @@ impl State {
                 self.open_screenshot_ui(show_cursor, path);
                 self.niri.cancel_mru();
             }
-            Action::ScreenshotWindow(write_to_disk, show_pointer, path) => {
+            Action::ScreenshotWindow(write_to_disk, show_pointer, notify, path) => {
                 let focus = self.niri.layout.focus_with_output();
                 if let Some((mapped, output)) = focus {
                     self.backend.with_primary_renderer(|renderer| {
@@ -780,6 +780,7 @@ impl State {
                             mapped,
                             write_to_disk,
                             show_pointer,
+                            notify,
                             path,
                         ) {
                             warn!("error taking screenshot: {err:?}");
@@ -791,6 +792,7 @@ impl State {
                 id,
                 write_to_disk,
                 show_pointer,
+                notify,
                 path,
             } => {
                 let mut windows = self.niri.layout.windows();
@@ -804,6 +806,7 @@ impl State {
                             mapped,
                             write_to_disk,
                             show_pointer,
+                            notify,
                             path,
                         ) {
                             warn!("error taking screenshot: {err:?}");
