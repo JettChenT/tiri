@@ -1174,6 +1174,13 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.center_visible_columns();
     }
 
+    pub fn align_visible_columns_left(&mut self) {
+        if self.floating_is_active.get() {
+            return;
+        }
+        self.scrolling.align_visible_columns_left();
+    }
+
     pub fn toggle_width(&mut self, forwards: bool) {
         if self.floating_is_active.get() {
             self.floating.toggle_window_width(None, forwards);

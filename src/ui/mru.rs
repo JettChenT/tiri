@@ -102,6 +102,11 @@ pub struct WindowMruUi {
     config: Rc<RefCell<Config>>,
 }
 
+pub struct WindowPreviewUi {
+    preview: Option<WindowPreview>,
+    config: Rc<RefCell<Config>>,
+}
+
 pub enum MruCloseRequest {
     Cancel,
     Confirm,
@@ -169,6 +174,12 @@ struct Inner {
 
     /// Offscreen buffer for the closing fade animation on the main output.
     offscreen: OffscreenBuffer,
+}
+
+struct WindowPreview {
+    output: Output,
+    geo: Rectangle<f64, Logical>,
+    thumbnail: Thumbnail,
 }
 
 #[derive(Debug)]
@@ -1234,6 +1245,148 @@ impl WindowMruUi {
         };
         format!("Scope {scope}")
     }
+}
+
+impl WindowPreviewUi {
+    pub fn new(config: Rc<RefCell<Config>>) -> Self {
+        Self {
+            preview: None,
+            config,
+        }
+    }
+
+    pub fn show(
+        &mut self,
+        clock: Clock,
+        mapped: &Mapped,
+        output: Output,
+        geo: Rectangle<f64, Logical>,
+    ) {
+        let mut thumbnail =
+            Thumbnail::from_mapped(mapped, clock, self.config.borrow().recent_windows.previews);
+        thumbnail.on_current_output = true;
+        thumbnail.on_current_workspace = true;
+
+        self.preview = Some(WindowPreview {
+            output,
+            geo,
+            thumbnail,
+        });
+    }
+
+    pub fn hide(&mut self) -> Option<Output> {
+        self.preview.take().map(|preview| preview.output)
+    }
+
+    pub fn output(&self) -> Option<&Output> {
+        self.preview.as_ref().map(|preview| &preview.output)
+    }
+
+    pub fn remove_window(&mut self, id: MappedId) -> Option<Output> {
+        if self
+            .preview
+            .as_ref()
+            .is_some_and(|preview| preview.thumbnail.id == id)
+        {
+            return self.hide();
+        }
+        None
+    }
+
+    pub fn update_window(&mut self, layout: &Layout<Mapped>, id: MappedId) {
+        let Some(preview) = &mut self.preview else {
+            return;
+        };
+        if preview.thumbnail.id != id {
+            return;
+        }
+        let Some((_, mapped)) = layout.windows().find(|(_, m)| m.id() == id) else {
+            return;
+        };
+
+        preview.thumbnail.update_window(mapped);
+    }
+
+    pub fn update_config(&mut self) {
+        if let Some(preview) = &mut self.preview {
+            preview.thumbnail.config = self.config.borrow().recent_windows.previews;
+        }
+    }
+
+    pub fn render_output<R: NiriRenderer>(
+        &self,
+        niri: &Niri,
+        output: &Output,
+        ctx: RenderCtx<R>,
+        push: &mut dyn FnMut(WindowMruUiRenderElement<R>),
+    ) {
+        let Some(preview) = &self.preview else {
+            return;
+        };
+        if &preview.output != output {
+            return;
+        }
+
+        let Some((_, mapped)) = niri
+            .layout
+            .windows()
+            .find(|(_, m)| m.id() == preview.thumbnail.id)
+        else {
+            return;
+        };
+
+        let output_size = output_size(output);
+        let scale = output.current_scale().fractional_scale();
+        let geo = fit_preview_geo(preview.geo, preview.thumbnail.size.to_f64(), output_size);
+        let bob_y = if mapped.rules().baba_is_float == Some(true) {
+            round_logical_in_physical(scale, baba_is_float_offset(niri.clock.now(), output_size.h))
+        } else {
+            0.
+        };
+        let config = self.config.borrow();
+
+        preview.thumbnail.render(
+            ctx,
+            &config.recent_windows,
+            mapped,
+            geo,
+            scale,
+            true,
+            bob_y,
+            push,
+        );
+    }
+}
+
+fn clamp_preview_geo(
+    mut geo: Rectangle<f64, Logical>,
+    output_size: Size<f64, Logical>,
+) -> Rectangle<f64, Logical> {
+    geo.size.w = geo.size.w.clamp(1., output_size.w.max(1.));
+    geo.size.h = geo.size.h.clamp(1., output_size.h.max(1.));
+    geo.loc.x = geo.loc.x.clamp(0., (output_size.w - geo.size.w).max(0.));
+    geo.loc.y = geo.loc.y.clamp(0., (output_size.h - geo.size.h).max(0.));
+    geo
+}
+
+fn fit_preview_geo(
+    bounds: Rectangle<f64, Logical>,
+    source_size: Size<f64, Logical>,
+    output_size: Size<f64, Logical>,
+) -> Rectangle<f64, Logical> {
+    let bounds = clamp_preview_geo(bounds, output_size);
+    if source_size.w <= 0. || source_size.h <= 0. {
+        return bounds;
+    }
+
+    let scale = f64::min(bounds.size.w / source_size.w, bounds.size.h / source_size.h);
+    let size = source_size.upscale(scale);
+    let offset = Point::new(
+        (bounds.size.w - size.w).max(0.) / 2.,
+        (bounds.size.h - size.h).max(0.) / 2.,
+    );
+
+    Rectangle::new(bounds.loc + offset, size)
 }
 
 fn compute_view_offset(cur_x: f64, working_width: f64, new_col_x: f64, new_col_width: f64) -> f64 {

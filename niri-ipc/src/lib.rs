@@ -474,6 +474,8 @@ pub enum Action {
     },
     /// Center all fully visible columns on the screen.
     CenterVisibleColumns {},
+    /// Align all fully visible columns to the left edge of the working area.
+    AlignVisibleColumnsLeft {},
     /// Focus the workspace below.
     FocusWorkspaceDown {},
     /// Focus the workspace above.
@@ -947,6 +949,29 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         path: Option<String>,
     },
+    /// Show a compositor-rendered preview of a window.
+    ShowWindowPreview {
+        /// Id of the window to preview.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: u64,
+        /// Output-local X coordinate for the preview.
+        #[cfg_attr(feature = "clap", arg(long))]
+        x: f64,
+        /// Output-local Y coordinate for the preview.
+        #[cfg_attr(feature = "clap", arg(long))]
+        y: f64,
+        /// Preview width in logical pixels.
+        #[cfg_attr(feature = "clap", arg(long))]
+        width: f64,
+        /// Preview height in logical pixels.
+        #[cfg_attr(feature = "clap", arg(long))]
+        height: f64,
+        /// Output on which to show the preview. If unset, uses the active output.
+        #[cfg_attr(feature = "clap", arg(long))]
+        output: Option<String>,
+    },
+    /// Hide the compositor-rendered window preview.
+    HideWindowPreview {},
 }
 
 /// Change in window or column size.

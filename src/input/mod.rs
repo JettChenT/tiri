@@ -1670,6 +1670,11 @@ impl State {
                 // FIXME: granular
                 self.niri.queue_redraw_all();
             }
+            Action::AlignVisibleColumnsLeft => {
+                self.niri.layout.align_visible_columns_left();
+                // FIXME: granular
+                self.niri.queue_redraw_all();
+            }
             Action::MaximizeColumn => {
                 self.niri.layout.toggle_full_width();
             }
@@ -2409,6 +2414,65 @@ impl State {
                 if self.niri.window_mru_ui.is_open() {
                     self.niri.window_mru_ui.cycle_scope();
                     self.niri.queue_redraw_mru_output();
+                }
+            }
+            Action::ShowWindowPreview {
+                id,
+                x,
+                y,
+                width,
+                height,
+                output,
+            } => {
+                let old_output = self.niri.window_preview_ui.output().cloned();
+                let shown_output = {
+                    let mut windows = self.niri.layout.windows();
+                    let window = windows.find(|(_, mapped)| mapped.id().get() == id);
+                    if let Some((mapped_output, mapped)) = window {
+                        let preview_output = output
+                            .as_deref()
+                            .and_then(|name| {
+                                self.niri
+                                    .global_space
+                                    .outputs()
+                                    .find(|candidate| candidate.name() == name)
+                                    .cloned()
+                            })
+                            .or_else(|| mapped_output.map(|monitor| monitor.output().clone()))
+                            .or_else(|| self.niri.layout.active_output().cloned());
+
+                        if let Some(preview_output) = preview_output {
+                            let geo = Rectangle::new(
+                                Point::new(x.max(0.), y.max(0.)),
+                                (width.max(1.), height.max(1.)).into(),
+                            );
+                            self.niri.window_preview_ui.show(
+                                self.niri.clock.clone(),
+                                mapped,
+                                preview_output.clone(),
+                                geo,
+                            );
+                            Some(preview_output)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some(preview_output) = shown_output {
+                    if let Some(old_output) = old_output {
+                        self.niri.queue_redraw(&old_output);
+                    }
+                    self.niri.queue_redraw(&preview_output);
+                } else if let Some(old_output) = self.niri.window_preview_ui.hide() {
+                    self.niri.queue_redraw(&old_output);
+                }
+            }
+            Action::HideWindowPreview => {
+                if let Some(output) = self.niri.window_preview_ui.hide() {
+                    self.niri.queue_redraw(&output);
                 }
             }
         }

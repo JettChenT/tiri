@@ -295,6 +295,9 @@ impl CompositorHandler for State {
                         .stop_casts_for_target(CastTarget::Window { id: id.get() });
 
                     self.niri.window_mru_ui.remove_window(id);
+                    if let Some(output) = self.niri.window_preview_ui.remove_window(id) {
+                        self.niri.queue_redraw(&output);
+                    }
                     self.niri.layout.remove_window(&window, transaction.clone());
                     self.add_default_dmabuf_pre_commit_hook(surface);
 
@@ -343,6 +346,9 @@ impl CompositorHandler for State {
 
                 // The toplevel remains mapped.
                 self.niri.window_mru_ui.update_window(&self.niri.layout, id);
+                self.niri
+                    .window_preview_ui
+                    .update_window(&self.niri.layout, id);
                 self.niri.layout.update_window(&window, serial);
 
                 // Move the toplevel according to the attach offset.
@@ -364,6 +370,7 @@ impl CompositorHandler for State {
                 if let Some(output) = output {
                     self.niri.queue_redraw(&output);
                     self.niri.queue_redraw_mru_output();
+                    self.niri.queue_redraw_window_preview_output();
                 }
                 return;
             }
@@ -380,10 +387,14 @@ impl CompositorHandler for State {
             self.niri
                 .window_mru_ui
                 .update_window(&self.niri.layout, mapped.id());
+            self.niri
+                .window_preview_ui
+                .update_window(&self.niri.layout, mapped.id());
             self.niri.layout.update_window(&window, None);
             if let Some(output) = output {
                 self.niri.queue_redraw(&output);
                 self.niri.queue_redraw_mru_output();
+                self.niri.queue_redraw_window_preview_output();
             }
             return;
         }

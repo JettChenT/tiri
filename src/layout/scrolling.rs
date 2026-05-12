@@ -2291,6 +2291,56 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         self.animate_view_offset_to_column(None, self.active_column_idx, None);
     }
 
+    pub fn align_visible_columns_left(&mut self) {
+        if self.columns.is_empty() {
+            return;
+        }
+
+        if self.is_centering_focused_column() {
+            return;
+        }
+
+        let view_x = self.target_view_pos();
+        let working_x = self.working_area.loc.x;
+        let working_w = self.working_area.size.w;
+
+        let gap = self.options.layout.gaps;
+        let mut leftmost_col_x = None;
+        let mut active_col_x = None;
+
+        let col_xs = self.column_xs(self.data.iter().copied());
+        for (idx, col_x) in col_xs.take(self.columns.len()).enumerate() {
+            if col_x < view_x + working_x + gap {
+                continue;
+            }
+
+            leftmost_col_x.get_or_insert(col_x);
+
+            let width = self.data[idx].width;
+            if view_x + working_x + working_w < col_x + width + gap {
+                break;
+            }
+
+            if idx == self.active_column_idx {
+                active_col_x = Some(col_x);
+            }
+        }
+
+        let Some(leftmost_col_x) = leftmost_col_x else {
+            return;
+        };
+        let Some(active_col_x) = active_col_x else {
+            return;
+        };
+
+        let col = &mut self.columns[self.active_column_idx];
+        cancel_resize_for_column(&mut self.interactive_resize, col);
+
+        let new_view_x = leftmost_col_x - working_x - gap;
+        self.animate_view_offset(self.active_column_idx, new_view_x - active_col_x);
+        self.animate_view_offset_to_column(None, self.active_column_idx, None);
+    }
+
     pub fn view_pos(&self) -> f64 {
         self.column_x(self.active_column_idx) + self.view_offset.current()
     }

@@ -215,6 +215,7 @@ pub enum Action {
     #[knuffel(skip)]
     CenterWindowById(u64),
     CenterVisibleColumns,
+    AlignVisibleColumnsLeft,
     FocusWorkspaceDown,
     #[knuffel(skip)]
     FocusWorkspaceDownUnderMouse,
@@ -373,6 +374,17 @@ pub enum Action {
     #[knuffel(skip)]
     LoadConfigFile(#[knuffel(argument)] Option<String>),
     #[knuffel(skip)]
+    ShowWindowPreview {
+        id: u64,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        output: Option<String>,
+    },
+    #[knuffel(skip)]
+    HideWindowPreview,
+    #[knuffel(skip)]
     MruAdvance {
         direction: MruDirection,
         scope: Option<MruScope>,
@@ -509,6 +521,7 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::CenterWindow { id: None } => Self::CenterWindow,
             niri_ipc::Action::CenterWindow { id: Some(id) } => Self::CenterWindowById(id),
             niri_ipc::Action::CenterVisibleColumns {} => Self::CenterVisibleColumns,
+            niri_ipc::Action::AlignVisibleColumnsLeft {} => Self::AlignVisibleColumnsLeft,
             niri_ipc::Action::FocusWorkspaceDown {} => Self::FocusWorkspaceDown,
             niri_ipc::Action::FocusWorkspaceUp {} => Self::FocusWorkspaceUp,
             niri_ipc::Action::FocusWorkspace { reference } => {
@@ -706,6 +719,22 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::SetWindowUrgent { id } => Self::SetWindowUrgent(id),
             niri_ipc::Action::UnsetWindowUrgent { id } => Self::UnsetWindowUrgent(id),
             niri_ipc::Action::LoadConfigFile { path } => Self::LoadConfigFile(path),
+            niri_ipc::Action::ShowWindowPreview {
+                id,
+                x,
+                y,
+                width,
+                height,
+                output,
+            } => Self::ShowWindowPreview {
+                id,
+                x,
+                y,
+                width,
+                height,
+                output,
+            },
+            niri_ipc::Action::HideWindowPreview {} => Self::HideWindowPreview,
         }
     }
 }

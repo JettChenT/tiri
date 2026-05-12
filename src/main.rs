@@ -70,6 +70,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cli = Cli::parse();
 
+    if cli.is_tiri {
+        println!("True");
+        return Ok(());
+    }
+
     if cli.session {
         // If we're starting as a session, assume that the intention is to start on a TTY unless
         // this is a WSL environment. Remove DISPLAY, WAYLAND_DISPLAY or WAYLAND_SOCKET from our

@@ -168,7 +168,7 @@ use crate::screencasting::Screencasting;
 use crate::ui::config_error_notification::ConfigErrorNotification;
 use crate::ui::exit_confirm_dialog::{ExitConfirmDialog, ExitConfirmDialogRenderElement};
 use crate::ui::hotkey_overlay::HotkeyOverlay;
-use crate::ui::mru::{MruCloseRequest, WindowMruUi, WindowMruUiRenderElement};
+use crate::ui::mru::{MruCloseRequest, WindowMruUi, WindowMruUiRenderElement, WindowPreviewUi};
 use crate::ui::screen_transition::{self, ScreenTransition};
 use crate::ui::screenshot_ui::{OutputScreenshot, ScreenshotUi, ScreenshotUiRenderElement};
 use crate::utils::scale::{closest_representable_scale, guess_monitor_scale};
@@ -390,6 +390,7 @@ pub struct Niri {
     pub exit_confirm_dialog: ExitConfirmDialog,
 
     pub window_mru_ui: WindowMruUi,
+    pub window_preview_ui: WindowPreviewUi,
     pub pending_mru_commit: Option<PendingMruCommit>,
 
     pub pick_window: Option<async_channel::Sender<Option<MappedId>>>,
@@ -1681,6 +1682,7 @@ impl State {
 
         if recent_windows_changed {
             self.niri.window_mru_ui.update_config();
+            self.niri.window_preview_ui.update_config();
         }
 
         if xwls_changed {
@@ -2411,6 +2413,7 @@ impl Niri {
 
         let screenshot_ui = ScreenshotUi::new(animation_clock.clone(), config.clone());
         let window_mru_ui = WindowMruUi::new(config.clone());
+        let window_preview_ui = WindowPreviewUi::new(config.clone());
         let config_error_notification =
             ConfigErrorNotification::new(animation_clock.clone(), config.clone());
 
@@ -2604,6 +2607,7 @@ impl Niri {
             exit_confirm_dialog,
 
             window_mru_ui,
+            window_preview_ui,
             pending_mru_commit: None,
 
             pick_window: None,
@@ -2971,6 +2975,10 @@ impl Niri {
 
         if self.window_mru_ui.output() == Some(output) {
             self.cancel_mru();
+        }
+        if self.window_preview_ui.output() == Some(output) {
+            self.window_preview_ui.hide();
+            self.queue_redraw_all();
         }
     }
 
@@ -4287,6 +4295,10 @@ impl Niri {
 
         // Then, the Alt-Tab switcher.
         self.window_mru_ui
+            .render_output(self, output, ctx.r(), &mut |elem| push(elem.into()));
+
+        // Then, shell-requested window previews.
+        self.window_preview_ui
             .render_output(self, output, ctx.r(), &mut |elem| push(elem.into()));
 
         // Don't draw the focus ring on the workspaces while interactively moving above those
@@ -6462,6 +6474,12 @@ impl Niri {
 
     pub fn queue_redraw_mru_output(&mut self) {
         if let Some(output) = self.window_mru_ui.output().cloned() {
+            self.queue_redraw(&output);
+        }
+    }
+
+    pub fn queue_redraw_window_preview_output(&mut self) {
+        if let Some(output) = self.window_preview_ui.output().cloned() {
             self.queue_redraw(&output);
         }
     }

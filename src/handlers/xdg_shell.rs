@@ -881,6 +881,10 @@ impl XdgShellHandler for State {
             self.maybe_warp_cursor_to_focus();
         }
 
+        if let Some(preview_output) = self.niri.window_preview_ui.remove_window(id) {
+            self.niri.queue_redraw(&preview_output);
+        }
+
         if let Some(output) = output {
             self.niri.queue_redraw(&output);
             self.niri.queue_redraw_mru_output();
