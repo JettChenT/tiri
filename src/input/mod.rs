@@ -18,6 +18,7 @@ use smithay::backend::input::{
     TabletToolTipState, TouchEvent,
 };
 use smithay::backend::libinput::LibinputInputBackend;
+use smithay::desktop::WindowSurfaceType;
 use smithay::input::dnd::DnDGrab;
 use smithay::input::keyboard::{keysyms, FilterResult, Keysym, Layout, ModifiersState};
 use smithay::input::pointer::{
@@ -877,6 +878,27 @@ impl State {
                 let window = window.map(|(_, m)| m.window.clone());
                 if let Some(window) = window {
                     self.focus_window(&window);
+                }
+            }
+            Action::CuaClick { id, x, y } => {
+                if !self.cua_click(id, x, y) {
+                    warn!("failed to send CUA click to window {id}");
+                }
+            }
+            Action::CuaScroll {
+                id,
+                x,
+                y,
+                scroll_x,
+                scroll_y,
+            } => {
+                if !self.cua_scroll(id, x, y, scroll_x, scroll_y) {
+                    warn!("failed to send CUA scroll to window {id}");
+                }
+            }
+            Action::CuaTypeText { id, text } => {
+                if let Err(err) = self.cua_type_text(id, &text) {
+                    warn!("failed to send CUA text to window {id}: {err}");
                 }
             }
             Action::FocusWindowInColumn(index) => {
@@ -2476,6 +2498,204 @@ impl State {
                 }
             }
         }
+    }
+
+    fn cua_pointer_target(
+        &self,
+        id: u64,
+        x: Option<f64>,
+        y: Option<f64>,
+    ) -> Option<(WlSurface, Point<f64, Logical>)> {
+        let mut windows = self.niri.layout.windows();
+        let (_, mapped) = windows.find(|(_, mapped)| mapped.id().get() == id)?;
+        let size = mapped.size().to_f64();
+        let pos = Point::new(x.unwrap_or(size.w / 2.), y.unwrap_or(size.h / 2.));
+
+        if pos.x < 0. || pos.y < 0. || pos.x >= size.w || pos.y >= size.h {
+            return None;
+        }
+
+        if !mapped.is_in_input_region(pos) {
+            return None;
+        }
+
+        let pos_from_buffer = pos - mapped.buf_loc().to_f64();
+        let (surface, surface_origin_from_buffer) = mapped
+            .window
+            .surface_under(pos_from_buffer, WindowSurfaceType::ALL)?;
+        let pos_within_surface = pos_from_buffer - surface_origin_from_buffer.to_f64();
+
+        Some((surface, pos_within_surface))
+    }
+
+    fn restore_pointer_focus(
+        &mut self,
+        old_location: Point<f64, Logical>,
+        old_focus: Option<(WlSurface, Point<f64, Logical>)>,
+        time: u32,
+    ) {
+        let pointer = self.niri.seat.get_pointer().unwrap();
+        pointer.motion(
+            self,
+            old_focus,
+            &MotionEvent {
+                location: old_location,
+                serial: SERIAL_COUNTER.next_serial(),
+                time,
+            },
+        );
+        pointer.frame(self);
+        self.niri.pointer_contents = self.niri.contents_under(old_location);
+    }
+
+    fn cua_motion_to_target(
+        &mut self,
+        surface: WlSurface,
+        pos_within_surface: Point<f64, Logical>,
+        time: u32,
+    ) -> (
+        Point<f64, Logical>,
+        Option<(WlSurface, Point<f64, Logical>)>,
+    ) {
+        let pointer = self.niri.seat.get_pointer().unwrap();
+        let old_location = pointer.current_location();
+        let old_focus = self.niri.contents_under(old_location).surface;
+        let target_origin = old_location - pos_within_surface;
+
+        pointer.motion(
+            self,
+            Some((surface, target_origin)),
+            &MotionEvent {
+                location: old_location,
+                serial: SERIAL_COUNTER.next_serial(),
+                time,
+            },
+        );
+        pointer.frame(self);
+
+        (old_location, old_focus)
+    }
+
+    fn cua_click(&mut self, id: u64, x: f64, y: f64) -> bool {
+        const BTN_LEFT: u32 = 0x110;
+
+        let Some((surface, pos_within_surface)) = self.cua_pointer_target(id, Some(x), Some(y))
+        else {
+            return false;
+        };
+        let time = get_monotonic_time().as_millis() as u32;
+        let (old_location, old_focus) =
+            self.cua_motion_to_target(surface, pos_within_surface, time);
+        let pointer = self.niri.seat.get_pointer().unwrap();
+
+        pointer.button(
+            self,
+            &ButtonEvent {
+                button: BTN_LEFT,
+                state: ButtonState::Pressed,
+                serial: SERIAL_COUNTER.next_serial(),
+                time,
+            },
+        );
+        pointer.button(
+            self,
+            &ButtonEvent {
+                button: BTN_LEFT,
+                state: ButtonState::Released,
+                serial: SERIAL_COUNTER.next_serial(),
+                time,
+            },
+        );
+        pointer.frame(self);
+
+        self.restore_pointer_focus(old_location, old_focus, time);
+        true
+    }
+
+    fn cua_scroll(
+        &mut self,
+        id: u64,
+        x: Option<f64>,
+        y: Option<f64>,
+        scroll_x: i32,
+        scroll_y: i32,
+    ) -> bool {
+        if scroll_x == 0 && scroll_y == 0 {
+            return true;
+        }
+
+        let Some((surface, pos_within_surface)) = self.cua_pointer_target(id, x, y) else {
+            return false;
+        };
+        let time = get_monotonic_time().as_millis() as u32;
+        let (old_location, old_focus) =
+            self.cua_motion_to_target(surface, pos_within_surface, time);
+        let pointer = self.niri.seat.get_pointer().unwrap();
+        let mut frame = AxisFrame::new(time).source(AxisSource::Wheel);
+
+        if scroll_x != 0 {
+            frame = frame
+                .value(Axis::Horizontal, f64::from(scroll_x) * 15.)
+                .v120(Axis::Horizontal, scroll_x.saturating_mul(120));
+        }
+        if scroll_y != 0 {
+            frame = frame
+                .value(Axis::Vertical, f64::from(scroll_y) * 15.)
+                .v120(Axis::Vertical, scroll_y.saturating_mul(120));
+        }
+
+        pointer.axis(self, frame);
+        pointer.frame(self);
+
+        self.restore_pointer_focus(old_location, old_focus, time);
+        true
+    }
+
+    fn cua_type_text(&mut self, id: u64, text: &str) -> Result<(), String> {
+        let target = {
+            let mut windows = self.niri.layout.windows();
+            let (_, mapped) = windows
+                .find(|(_, mapped)| mapped.id().get() == id)
+                .ok_or_else(|| format!("window {id} not found"))?;
+            mapped.toplevel().wl_surface().clone()
+        };
+        let keys = text
+            .chars()
+            .map(|c| {
+                char_to_keycodes(c)
+                    .ok_or_else(|| format!("unsupported character for CUA typing: {c:?}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let old_focus = self.niri.keyboard_focus.surface().cloned();
+        let keyboard = self.niri.seat.get_keyboard().unwrap();
+        let time = get_monotonic_time().as_millis() as u32;
+
+        keyboard.set_focus(self, Some(target), SERIAL_COUNTER.next_serial());
+        for keys in keys {
+            for key in keys.iter().take(keys.len().saturating_sub(1)) {
+                self.cua_key(*key, KeyState::Pressed, time);
+            }
+            let key = *keys.last().expect("non-empty key sequence");
+            self.cua_key(key, KeyState::Pressed, time);
+            self.cua_key(key, KeyState::Released, time);
+            for key in keys.iter().take(keys.len().saturating_sub(1)).rev() {
+                self.cua_key(*key, KeyState::Released, time);
+            }
+        }
+        keyboard.set_focus(self, old_focus, SERIAL_COUNTER.next_serial());
+        Ok(())
+    }
+
+    fn cua_key(&mut self, keycode: Keycode, state: KeyState, time: u32) {
+        let keyboard = self.niri.seat.get_keyboard().unwrap();
+        keyboard.input(
+            self,
+            keycode,
+            state,
+            SERIAL_COUNTER.next_serial(),
+            time,
+            |_, _, _| FilterResult::<()>::Forward,
+        );
     }
 
     fn on_pointer_motion<I: InputBackend>(&mut self, event: I::PointerMotionEvent) {
@@ -5159,6 +5379,81 @@ fn grab_allows_hot_corner(grab: &(dyn PointerGrab<State> + 'static)) -> bool {
     }
 
     true
+}
+
+fn keycode(evdev_code: u32) -> Keycode {
+    Keycode::from(evdev_code + 8)
+}
+
+fn char_to_keycodes(c: char) -> Option<Vec<Keycode>> {
+    const KEY_LEFTSHIFT: u32 = 42;
+
+    let mut keys = Vec::new();
+    if c.is_ascii_uppercase() {
+        keys.push(keycode(KEY_LEFTSHIFT));
+    }
+
+    let code = match c.to_ascii_lowercase() {
+        'a' => 30,
+        'b' => 48,
+        'c' => 46,
+        'd' => 32,
+        'e' => 18,
+        'f' => 33,
+        'g' => 34,
+        'h' => 35,
+        'i' => 23,
+        'j' => 36,
+        'k' => 37,
+        'l' => 38,
+        'm' => 50,
+        'n' => 49,
+        'o' => 24,
+        'p' => 25,
+        'q' => 16,
+        'r' => 19,
+        's' => 31,
+        't' => 20,
+        'u' => 22,
+        'v' => 47,
+        'w' => 17,
+        'x' => 45,
+        'y' => 21,
+        'z' => 44,
+        '1' => 2,
+        '2' => 3,
+        '3' => 4,
+        '4' => 5,
+        '5' => 6,
+        '6' => 7,
+        '7' => 8,
+        '8' => 9,
+        '9' => 10,
+        '0' => 11,
+        ' ' => 57,
+        '\n' => 28,
+        '.' => 52,
+        ',' => 51,
+        '-' => 12,
+        '/' => 53,
+        ';' => 39,
+        '_' => {
+            keys.push(keycode(KEY_LEFTSHIFT));
+            12
+        }
+        '?' => {
+            keys.push(keycode(KEY_LEFTSHIFT));
+            53
+        }
+        ':' => {
+            keys.push(keycode(KEY_LEFTSHIFT));
+            39
+        }
+        _ => return None,
+    };
+
+    keys.push(keycode(code));
+    Some(keys)
 }
 
 /// Returns an iterator over bindings.

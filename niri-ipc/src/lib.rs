@@ -328,6 +328,45 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: u64,
     },
+    /// Send a computer-use click to a window without changing compositor focus.
+    CuaClick {
+        /// Id of the window to click.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: u64,
+        /// Window-relative X coordinate in logical pixels.
+        #[cfg_attr(feature = "clap", arg(long))]
+        x: f64,
+        /// Window-relative Y coordinate in logical pixels.
+        #[cfg_attr(feature = "clap", arg(long))]
+        y: f64,
+    },
+    /// Send a computer-use scroll to a window without changing compositor focus.
+    CuaScroll {
+        /// Id of the window to scroll.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: u64,
+        /// Optional window-relative X coordinate in logical pixels. Defaults to the window center.
+        #[cfg_attr(feature = "clap", arg(long))]
+        x: Option<f64>,
+        /// Optional window-relative Y coordinate in logical pixels. Defaults to the window center.
+        #[cfg_attr(feature = "clap", arg(long))]
+        y: Option<f64>,
+        /// Horizontal wheel ticks. Positive values scroll right.
+        #[cfg_attr(feature = "clap", arg(long, default_value_t = 0))]
+        scroll_x: i32,
+        /// Vertical wheel ticks. Positive values scroll down.
+        #[cfg_attr(feature = "clap", arg(long, default_value_t = 0))]
+        scroll_y: i32,
+    },
+    /// Send computer-use text to a window without changing compositor layout focus.
+    CuaTypeText {
+        /// Id of the window to type into.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: u64,
+        /// Text to type.
+        #[cfg_attr(feature = "clap", arg(long))]
+        text: String,
+    },
     /// Focus a window in the focused column by index.
     FocusWindowInColumn {
         /// Index of the window in the column.

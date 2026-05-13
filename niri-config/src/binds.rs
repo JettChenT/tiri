@@ -158,6 +158,25 @@ pub enum Action {
     ToggleWindowedFullscreenById(u64),
     #[knuffel(skip)]
     FocusWindow(u64),
+    #[knuffel(skip)]
+    CuaClick {
+        id: u64,
+        x: f64,
+        y: f64,
+    },
+    #[knuffel(skip)]
+    CuaScroll {
+        id: u64,
+        x: Option<f64>,
+        y: Option<f64>,
+        scroll_x: i32,
+        scroll_y: i32,
+    },
+    #[knuffel(skip)]
+    CuaTypeText {
+        id: u64,
+        text: String,
+    },
     FocusWindowInColumn(#[knuffel(argument)] u8),
     FocusWindowPrevious,
     FocusColumnLeft,
@@ -457,6 +476,21 @@ impl From<niri_ipc::Action> for Action {
                 Self::ToggleWindowedFullscreenById(id)
             }
             niri_ipc::Action::FocusWindow { id } => Self::FocusWindow(id),
+            niri_ipc::Action::CuaClick { id, x, y } => Self::CuaClick { id, x, y },
+            niri_ipc::Action::CuaScroll {
+                id,
+                x,
+                y,
+                scroll_x,
+                scroll_y,
+            } => Self::CuaScroll {
+                id,
+                x,
+                y,
+                scroll_x,
+                scroll_y,
+            },
+            niri_ipc::Action::CuaTypeText { id, text } => Self::CuaTypeText { id, text },
             niri_ipc::Action::FocusWindowInColumn { index } => Self::FocusWindowInColumn(index),
             niri_ipc::Action::FocusWindowPrevious {} => Self::FocusWindowPrevious,
             niri_ipc::Action::FocusColumnLeft {} => Self::FocusColumnLeft,
