@@ -129,10 +129,13 @@ pub enum Msg {
         #[arg(long)]
         y: f64,
         /// Built-in cursor shape.
-        #[arg(long, default_value = "ring")]
-        shape: niri_ipc::VirtualCursorShape,
+        #[arg(long)]
+        shape: Option<niri_ipc::VirtualCursorShape>,
+        /// Xcursor theme icon name. Defaults to the normal pointer icon.
+        #[arg(long)]
+        cursor_icon: Option<String>,
         /// Cursor size in logical pixels.
-        #[arg(long, default_value_t = 28)]
+        #[arg(long, default_value_t = 24)]
         size: u16,
         /// Cursor color, as #rgb, #rrggbb, or #rrggbbaa.
         #[arg(long)]
@@ -164,6 +167,9 @@ pub enum Msg {
         /// Built-in cursor shape.
         #[arg(long)]
         shape: Option<niri_ipc::VirtualCursorShape>,
+        /// Xcursor theme icon name. Use an empty string to reset to the normal pointer icon.
+        #[arg(long)]
+        cursor_icon: Option<String>,
         /// Cursor size in logical pixels.
         #[arg(long)]
         size: Option<u16>,

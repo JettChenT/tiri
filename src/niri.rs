@@ -171,7 +171,7 @@ use crate::ui::hotkey_overlay::HotkeyOverlay;
 use crate::ui::mru::{MruCloseRequest, WindowMruUi, WindowMruUiRenderElement, WindowPreviewUi};
 use crate::ui::screen_transition::{self, ScreenTransition};
 use crate::ui::screenshot_ui::{OutputScreenshot, ScreenshotUi, ScreenshotUiRenderElement};
-use crate::ui::virtual_cursors::VirtualCursorUi;
+use crate::ui::virtual_cursors::{VirtualCursorRenderElement, VirtualCursorUi};
 use crate::utils::scale::{closest_representable_scale, guess_monitor_scale};
 use crate::utils::spawning::{CHILD_DISPLAY, CHILD_ENV};
 use crate::utils::vblank_throttle::VBlankThrottle;
@@ -4332,8 +4332,13 @@ impl Niri {
         // Then, compositor-rendered virtual cursors pinned to mapped windows. These are part of
         // the normal desktop render only, below compositor UI and the hardware pointer.
         if ctx.target == RenderTarget::Output {
-            self.virtual_cursor_ui
-                .render_output(self, output, &mut |elem| push(elem.into()));
+            self.virtual_cursor_ui.render_output(
+                self,
+                ctx.renderer,
+                output,
+                self.start_time.elapsed().as_millis() as u32,
+                &mut |elem| push(elem.into()),
+            );
         }
 
         // Don't draw the focus ring on the workspaces while interactively moving above those
@@ -6736,6 +6741,7 @@ niri_render_elements! {
             SolidColorRenderElement
         >>>,
         Pointer = PointerRenderElements<R>,
+        VirtualCursor = VirtualCursorRenderElement<R>,
         Wayland = WaylandSurfaceRenderElement<R>,
         SolidColor = SolidColorRenderElement,
         ScreenshotUi = ScreenshotUiRenderElement,

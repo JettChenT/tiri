@@ -294,6 +294,34 @@ pub enum VirtualCursorShape {
     Arrow,
 }
 
+impl Default for VirtualCursorShape {
+    fn default() -> Self {
+        Self::Ring
+    }
+}
+
+/// Pinned virtual cursor visual source.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub enum VirtualCursorSource {
+    /// Cursor loaded from the compositor's current xcursor theme.
+    Theme {
+        /// Optional xcursor icon name. If unset, tiri uses the default pointer icon.
+        icon: Option<String>,
+    },
+    /// Simple compositor-drawn cursor shape.
+    Builtin {
+        /// Built-in shape to draw.
+        shape: VirtualCursorShape,
+    },
+}
+
+impl Default for VirtualCursorSource {
+    fn default() -> Self {
+        Self::Theme { icon: None }
+    }
+}
+
 /// RGBA color in unpremultiplied linear components, each from 0.0 to 1.0.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
@@ -309,10 +337,14 @@ pub struct RgbaColor {
 }
 
 /// Pinned virtual cursor appearance.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct VirtualCursorAppearance {
-    /// Built-in cursor shape.
+    /// Cursor visual source. Defaults to the compositor's current xcursor theme.
+    #[serde(default)]
+    pub source: VirtualCursorSource,
+    /// Legacy built-in cursor shape. Used when older clients omit `source`.
+    #[serde(default)]
     pub shape: VirtualCursorShape,
     /// Cursor size in logical pixels.
     pub size: u16,
@@ -350,8 +382,9 @@ pub enum VirtualCursorCurve {
 impl Default for VirtualCursorAppearance {
     fn default() -> Self {
         Self {
+            source: VirtualCursorSource::default(),
             shape: VirtualCursorShape::Ring,
-            size: 28,
+            size: 24,
             color: RgbaColor {
                 r: 0.18,
                 g: 0.83,

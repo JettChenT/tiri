@@ -3,17 +3,28 @@ use std::collections::HashMap;
 
 use niri_ipc::{
     RgbaColor, VirtualCursor, VirtualCursorAnimation, VirtualCursorAppearance, VirtualCursorCreate,
-    VirtualCursorCurve, VirtualCursorShape, VirtualCursorUpdate,
+    VirtualCursorCurve, VirtualCursorShape, VirtualCursorSource, VirtualCursorUpdate,
 };
+use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::Color32F;
 use smithay::output::Output;
-use smithay::utils::{Logical, Point, Rectangle, Size};
+use smithay::utils::{Logical, Point, Rectangle, Scale, Size};
 
 use crate::animation::{Animation, Clock, CubicBezier, Curve};
+use crate::cursor::XCursor;
 use crate::niri::Niri;
+use crate::niri_render_elements;
+use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::window::mapped::MappedId;
+
+niri_render_elements! {
+    VirtualCursorRenderElement<R> => {
+        SolidColor = SolidColorRenderElement,
+        Themed = MemoryRenderBufferRenderElement<R>,
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct VirtualCursorUi {
@@ -194,11 +205,13 @@ impl VirtualCursorUi {
         }
     }
 
-    pub fn render_output(
+    pub fn render_output<R: NiriRenderer>(
         &self,
         niri: &Niri,
+        renderer: &mut R,
         output: &Output,
-        push: &mut dyn FnMut(SolidColorRenderElement),
+        animation_millis: u32,
+        push: &mut dyn FnMut(VirtualCursorRenderElement<R>),
     ) {
         let mut cursors = self.cursors.values().collect::<Vec<_>>();
         // Output render order is top-to-bottom, so higher z-index cursors go first.
@@ -219,7 +232,7 @@ impl VirtualCursorUi {
             ) else {
                 continue;
             };
-            cursor.render(pos, push);
+            cursor.render(niri, renderer, output, pos, animation_millis, push);
         }
     }
 }
@@ -232,7 +245,7 @@ impl PinnedCursor {
             window_id: self.window_id.get(),
             x: position.x,
             y: position.y,
-            appearance: self.appearance,
+            appearance: self.appearance.clone(),
             animation: self.animation_config,
             visible: self.visible,
             z_index: self.z_index,
@@ -272,8 +285,83 @@ impl PinnedCursor {
         });
     }
 
-    fn render(&self, point: Point<f64, Logical>, push: &mut dyn FnMut(SolidColorRenderElement)) {
-        let rects = self.rects(point);
+    fn render<R: NiriRenderer>(
+        &self,
+        niri: &Niri,
+        renderer: &mut R,
+        output: &Output,
+        point: Point<f64, Logical>,
+        animation_millis: u32,
+        push: &mut dyn FnMut(VirtualCursorRenderElement<R>),
+    ) {
+        match &self.appearance.source {
+            VirtualCursorSource::Theme { icon } => {
+                self.render_themed(
+                    niri,
+                    renderer,
+                    output,
+                    point,
+                    icon.as_deref(),
+                    animation_millis,
+                    push,
+                );
+            }
+            VirtualCursorSource::Builtin { shape } => {
+                self.render_builtin(point, *shape, push);
+            }
+        }
+    }
+
+    fn render_themed<R: NiriRenderer>(
+        &self,
+        niri: &Niri,
+        renderer: &mut R,
+        output: &Output,
+        point: Point<f64, Logical>,
+        icon: Option<&str>,
+        animation_millis: u32,
+        push: &mut dyn FnMut(VirtualCursorRenderElement<R>),
+    ) {
+        let cursor_scale = output.current_scale().integer_scale();
+        let default_cursor = || niri.cursor_manager.get_default_cursor(cursor_scale);
+        let (cache_name, cursor) = match icon {
+            Some(name) => niri
+                .cursor_manager
+                .get_cursor_with_icon_name(name, cursor_scale, Some(self.appearance.size))
+                .map(|cursor| (name, cursor))
+                .unwrap_or_else(|| ("default", default_cursor())),
+            None => ("default", default_cursor()),
+        };
+
+        let (idx, frame) = cursor.frame(animation_millis);
+        let hotspot = XCursor::hotspot(frame).to_logical(cursor_scale);
+        let output_scale = Scale::from(output.current_scale().fractional_scale());
+        let loc = (point - hotspot.to_f64()).to_physical_precise_round(output_scale);
+        let texture = niri
+            .cursor_texture_cache
+            .get_named(cache_name, cursor_scale, &cursor, idx);
+
+        match MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            loc,
+            &texture,
+            None,
+            None,
+            None,
+            Kind::Cursor,
+        ) {
+            Ok(element) => push(element.into()),
+            Err(err) => warn!("error importing a virtual cursor texture: {err:?}"),
+        }
+    }
+
+    fn render_builtin<R: NiriRenderer>(
+        &self,
+        point: Point<f64, Logical>,
+        shape: VirtualCursorShape,
+        push: &mut dyn FnMut(VirtualCursorRenderElement<R>),
+    ) {
+        let rects = self.rects(point, shape);
         let mut buffers = self.buffers.borrow_mut();
         if buffers.len() < rects.len() {
             buffers.resize_with(rects.len(), SolidColorBuffer::default);
@@ -282,23 +370,30 @@ impl PinnedCursor {
         for (idx, (rect, color)) in rects.into_iter().enumerate() {
             let buffer = &mut buffers[idx];
             buffer.update(rect.size, color);
-            push(SolidColorRenderElement::from_buffer(
-                buffer,
-                rect.loc,
-                self.appearance.opacity.clamp(0., 1.),
-                Kind::Cursor,
-            ));
+            push(
+                SolidColorRenderElement::from_buffer(
+                    buffer,
+                    rect.loc,
+                    self.appearance.opacity.clamp(0., 1.),
+                    Kind::Cursor,
+                )
+                .into(),
+            );
         }
     }
 
-    fn rects(&self, point: Point<f64, Logical>) -> Vec<(Rectangle<f64, Logical>, Color32F)> {
+    fn rects(
+        &self,
+        point: Point<f64, Logical>,
+        shape: VirtualCursorShape,
+    ) -> Vec<(Rectangle<f64, Logical>, Color32F)> {
         let size = f64::from(self.appearance.size.max(4));
         let stroke = (size / 7.).clamp(2., 5.);
         let half = size / 2.;
         let color = color32(self.appearance.color);
         let outline = color32(self.appearance.outline_color);
 
-        match self.appearance.shape {
+        match shape {
             VirtualCursorShape::Ring => {
                 let outer =
                     Rectangle::new(point - Point::new(half, half), Size::from((size, size)));

@@ -9,8 +9,8 @@ use niri_ipc::socket::Socket;
 use niri_ipc::{
     Action, Cast, CastKind, CastTarget, Event, KeyboardLayouts, LogicalOutput, Mode, Output,
     OutputConfigChanged, Overview, Request, Response, RgbaColor, Transform, VirtualCursorAnimation,
-    VirtualCursorAppearance, VirtualCursorCreate, VirtualCursorCurve, VirtualCursorUpdate, Window,
-    WindowLayout,
+    VirtualCursorAppearance, VirtualCursorCreate, VirtualCursorCurve, VirtualCursorSource,
+    VirtualCursorUpdate, Window, WindowLayout,
 };
 use serde_json::json;
 
@@ -60,6 +60,7 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
             x,
             y,
             shape,
+            cursor_icon,
             size,
             color,
             outline_color,
@@ -72,7 +73,8 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                 x: *x,
                 y: *y,
                 appearance: Some(VirtualCursorAppearance {
-                    shape: *shape,
+                    source: virtual_cursor_source(*shape, cursor_icon.clone()),
+                    shape: (*shape).unwrap_or_default(),
                     size: *size,
                     color: parse_rgba_color_opt(color.as_deref())?.unwrap_or(RgbaColor {
                         r: 0.18,
@@ -105,6 +107,7 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
             x,
             y,
             shape,
+            cursor_icon,
             size,
             color,
             outline_color,
@@ -118,13 +121,15 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                 x: *x,
                 y: *y,
                 appearance: if shape.is_some()
+                    || cursor_icon.is_some()
                     || size.is_some()
                     || color.is_some()
                     || outline_color.is_some()
                 {
                     Some(VirtualCursorAppearance {
+                        source: virtual_cursor_source(*shape, cursor_icon.clone()),
                         shape: (*shape).unwrap_or(niri_ipc::VirtualCursorShape::Ring),
-                        size: (*size).unwrap_or(28),
+                        size: (*size).unwrap_or(24),
                         color: parse_rgba_color_opt(color.as_deref())?.unwrap_or(RgbaColor {
                             r: 0.18,
                             g: 0.83,
@@ -971,6 +976,21 @@ fn ensure_absolute_path(path: &mut String) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn virtual_cursor_source(
+    shape: Option<niri_ipc::VirtualCursorShape>,
+    cursor_icon: Option<String>,
+) -> VirtualCursorSource {
+    if let Some(shape) = shape {
+        return VirtualCursorSource::Builtin { shape };
+    }
+
+    let icon = cursor_icon.and_then(|icon| {
+        let icon = icon.trim().to_owned();
+        (!icon.is_empty()).then_some(icon)
+    });
+    VirtualCursorSource::Theme { icon }
 }
 
 fn parse_rgba_color_opt(color: Option<&str>) -> anyhow::Result<Option<RgbaColor>> {
