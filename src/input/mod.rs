@@ -20,7 +20,9 @@ use smithay::backend::input::{
 use smithay::backend::libinput::LibinputInputBackend;
 use smithay::desktop::WindowSurfaceType;
 use smithay::input::dnd::DnDGrab;
-use smithay::input::keyboard::{keysyms, FilterResult, Keysym, Layout, ModifiersState};
+use smithay::input::keyboard::{
+    keysyms, FilterResult, KeyboardHandle, Keysym, Layout, ModifiersState,
+};
 use smithay::input::pointer::{
     AxisFrame, ButtonEvent, CursorIcon, CursorImageStatus, Focus, GestureHoldBeginEvent,
     GestureHoldEndEvent, GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent,
@@ -34,6 +36,7 @@ use smithay::input::SeatHandler;
 use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_data_source::WlDataSource;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Point, Rectangle, Transform, SERIAL_COUNTER};
 use smithay::wayland::keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitor;
 use smithay::wayland::pointer_constraints::{with_pointer_constraint, PointerConstraint};
@@ -948,6 +951,11 @@ impl State {
             Action::CuaTypeText { id, text } => {
                 if let Err(err) = self.cua_type_text(id, &text) {
                     warn!("failed to send CUA text to window {id}: {err}");
+                }
+            }
+            Action::CuaPressKey { id, key } => {
+                if let Err(err) = self.cua_press_key(id, &key) {
+                    warn!("failed to send CUA key to window {id}: {err}");
                 }
             }
             Action::VirtualCursorMove {
@@ -2756,13 +2764,6 @@ impl State {
     }
 
     fn cua_type_text(&mut self, id: u64, text: &str) -> Result<(), String> {
-        let target = {
-            let mut windows = self.niri.layout.windows();
-            let (_, mapped) = windows
-                .find(|(_, mapped)| mapped.id().get() == id)
-                .ok_or_else(|| format!("window {id} not found"))?;
-            mapped.toplevel().wl_surface().clone()
-        };
         let keys = text
             .chars()
             .map(|c| {
@@ -2770,28 +2771,65 @@ impl State {
                     .ok_or_else(|| format!("unsupported character for CUA typing: {c:?}"))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let old_focus = self.niri.keyboard_focus.surface().cloned();
-        let keyboard = self.niri.seat.get_keyboard().unwrap();
+
+        self.cua_send_keys(id, keys)
+    }
+
+    fn cua_press_key(&mut self, id: u64, key: &str) -> Result<(), String> {
+        let keycodes = key_name_to_keycodes(key)
+            .ok_or_else(|| format!("unsupported key for CUA key press: {key:?}"))?;
+
+        self.cua_send_keys(id, vec![keycodes])
+    }
+
+    fn cua_send_keys(&mut self, id: u64, keys: Vec<Vec<Keycode>>) -> Result<(), String> {
+        let target = {
+            let mut windows = self.niri.layout.windows();
+            let (_, mapped) = windows
+                .find(|(_, mapped)| mapped.id().get() == id)
+                .ok_or_else(|| format!("window {id} not found"))?;
+            mapped.toplevel().wl_surface().clone()
+        };
+        let target_client = self.niri.display_handle.get_client(target.id()).ok();
+        let use_cua_seat = target_client
+            .as_ref()
+            .and_then(|client| {
+                let keyboard = self.niri.cua_seat.get_keyboard()?;
+                let has_keyboard = keyboard.client_keyboards(client).next().is_some();
+                Some(has_keyboard)
+            })
+            .unwrap_or(false);
+        let keyboard = if use_cua_seat {
+            self.niri.cua_seat.get_keyboard().unwrap()
+        } else {
+            self.niri.seat.get_keyboard().unwrap()
+        };
+        let old_focus = keyboard.current_focus();
         let time = get_monotonic_time().as_millis() as u32;
 
         keyboard.set_focus(self, Some(target), SERIAL_COUNTER.next_serial());
         for keys in keys {
             for key in keys.iter().take(keys.len().saturating_sub(1)) {
-                self.cua_key(*key, KeyState::Pressed, time);
+                self.cua_key(&keyboard, *key, KeyState::Pressed, time);
             }
             let key = *keys.last().expect("non-empty key sequence");
-            self.cua_key(key, KeyState::Pressed, time);
-            self.cua_key(key, KeyState::Released, time);
+            self.cua_key(&keyboard, key, KeyState::Pressed, time);
+            self.cua_key(&keyboard, key, KeyState::Released, time);
             for key in keys.iter().take(keys.len().saturating_sub(1)).rev() {
-                self.cua_key(*key, KeyState::Released, time);
+                self.cua_key(&keyboard, *key, KeyState::Released, time);
             }
         }
         keyboard.set_focus(self, old_focus, SERIAL_COUNTER.next_serial());
         Ok(())
     }
 
-    fn cua_key(&mut self, keycode: Keycode, state: KeyState, time: u32) {
-        let keyboard = self.niri.seat.get_keyboard().unwrap();
+    fn cua_key(
+        &mut self,
+        keyboard: &KeyboardHandle<Self>,
+        keycode: Keycode,
+        state: KeyState,
+        time: u32,
+    ) {
         keyboard.input(
             self,
             keycode,
@@ -5558,6 +5596,27 @@ fn char_to_keycodes(c: char) -> Option<Vec<Keycode>> {
 
     keys.push(keycode(code));
     Some(keys)
+}
+
+fn key_name_to_keycodes(key: &str) -> Option<Vec<Keycode>> {
+    let code = match key.to_ascii_lowercase().as_str() {
+        "enter" | "return" => 28,
+        "tab" => 15,
+        "escape" | "esc" => 1,
+        "backspace" => 14,
+        "delete" | "del" => 111,
+        "arrowleft" | "left" => 105,
+        "arrowright" | "right" => 106,
+        "arrowup" | "up" => 103,
+        "arrowdown" | "down" => 108,
+        "home" => 102,
+        "end" => 107,
+        "pageup" | "page-up" => 104,
+        "pagedown" | "page-down" => 109,
+        _ => return None,
+    };
+
+    Some(vec![keycode(code)])
 }
 
 /// Returns an iterator over bindings.

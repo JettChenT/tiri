@@ -192,6 +192,11 @@ pub enum Action {
         text: String,
     },
     #[knuffel(skip)]
+    CuaPressKey {
+        id: u64,
+        key: String,
+    },
+    #[knuffel(skip)]
     VirtualCursorMove {
         cursor_id: String,
         x: f64,
@@ -551,6 +556,7 @@ impl From<niri_ipc::Action> for Action {
                 scroll_y,
             },
             niri_ipc::Action::CuaTypeText { id, text } => Self::CuaTypeText { id, text },
+            niri_ipc::Action::CuaPressKey { id, key } => Self::CuaPressKey { id, key },
             niri_ipc::Action::VirtualCursorMove {
                 cursor_id,
                 x,

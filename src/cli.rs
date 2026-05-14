@@ -134,6 +134,9 @@ pub enum Msg {
         /// Xcursor theme icon name. Defaults to the normal pointer icon.
         #[arg(long)]
         cursor_icon: Option<String>,
+        /// Xcursor theme name. Defaults to the compositor's configured cursor theme.
+        #[arg(long)]
+        cursor_theme: Option<String>,
         /// Cursor size in logical pixels.
         #[arg(long, default_value_t = 24)]
         size: u16,
@@ -170,6 +173,9 @@ pub enum Msg {
         /// Xcursor theme icon name. Use an empty string to reset to the normal pointer icon.
         #[arg(long)]
         cursor_icon: Option<String>,
+        /// Xcursor theme name. Use an empty string to reset to the compositor's configured theme.
+        #[arg(long)]
+        cursor_theme: Option<String>,
         /// Cursor size in logical pixels.
         #[arg(long)]
         size: Option<u16>,

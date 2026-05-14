@@ -295,12 +295,13 @@ impl PinnedCursor {
         push: &mut dyn FnMut(VirtualCursorRenderElement<R>),
     ) {
         match &self.appearance.source {
-            VirtualCursorSource::Theme { icon } => {
+            VirtualCursorSource::Theme { theme, icon } => {
                 self.render_themed(
                     niri,
                     renderer,
                     output,
                     point,
+                    theme.as_deref(),
                     icon.as_deref(),
                     animation_millis,
                     push,
@@ -318,19 +319,41 @@ impl PinnedCursor {
         renderer: &mut R,
         output: &Output,
         point: Point<f64, Logical>,
+        theme: Option<&str>,
         icon: Option<&str>,
         animation_millis: u32,
         push: &mut dyn FnMut(VirtualCursorRenderElement<R>),
     ) {
         let cursor_scale = output.current_scale().integer_scale();
         let default_cursor = || niri.cursor_manager.get_default_cursor(cursor_scale);
-        let (cache_name, cursor) = match icon {
-            Some(name) => niri
+        let icon_name = icon.unwrap_or("default");
+        let (cache_name, cursor) = match theme {
+            Some(theme) => niri
                 .cursor_manager
-                .get_cursor_with_icon_name(name, cursor_scale, Some(self.appearance.size))
-                .map(|cursor| (name, cursor))
-                .unwrap_or_else(|| ("default", default_cursor())),
-            None => ("default", default_cursor()),
+                .get_cursor_with_theme_icon(
+                    theme,
+                    icon_name,
+                    cursor_scale,
+                    Some(self.appearance.size),
+                )
+                .or_else(|| {
+                    niri.cursor_manager.get_cursor_with_theme_icon(
+                        theme,
+                        "left_ptr",
+                        cursor_scale,
+                        Some(self.appearance.size),
+                    )
+                })
+                .map(|cursor| (format!("{theme}:{icon_name}"), cursor))
+                .unwrap_or_else(|| ("default".to_owned(), default_cursor())),
+            None => match icon {
+                Some(name) => niri
+                    .cursor_manager
+                    .get_cursor_with_icon_name(name, cursor_scale, Some(self.appearance.size))
+                    .map(|cursor| (name.to_owned(), cursor))
+                    .unwrap_or_else(|| ("default".to_owned(), default_cursor())),
+                None => ("default".to_owned(), default_cursor()),
+            },
         };
 
         let (idx, frame) = cursor.frame(animation_millis);
@@ -339,7 +362,7 @@ impl PinnedCursor {
         let loc = (point - hotspot.to_f64()).to_physical_precise_round(output_scale);
         let texture = niri
             .cursor_texture_cache
-            .get_named(cache_name, cursor_scale, &cursor, idx);
+            .get_named(&cache_name, cursor_scale, &cursor, idx);
 
         match MemoryRenderBufferRenderElement::from_buffer(
             renderer,

@@ -323,6 +323,7 @@ pub struct Niri {
     pub single_pixel_buffer_state: SinglePixelBufferState,
 
     pub seat: Seat<State>,
+    pub cua_seat: Seat<State>,
     /// Scancodes of the keys to suppress.
     pub suppressed_keys: HashSet<Keycode>,
     /// Button codes of the mouse buttons to suppress.
@@ -2404,6 +2405,34 @@ impl Niri {
         }
         seat.add_pointer();
 
+        let mut cua_seat: Seat<State> = seat_state.new_wl_seat(&display_handle, "tiri-cua");
+        let cua_keyboard = match cua_seat.add_keyboard(
+            config_.input.keyboard.xkb.to_xkb_config(),
+            config_.input.keyboard.repeat_delay.into(),
+            config_.input.keyboard.repeat_rate.into(),
+        ) {
+            Err(err) => {
+                if let smithay::input::keyboard::Error::BadKeymap = err {
+                    warn!("error loading the configured CUA xkb keymap, trying default");
+                } else {
+                    warn!("error adding CUA keyboard: {err:?}");
+                }
+                cua_seat
+                    .add_keyboard(
+                        Default::default(),
+                        config_.input.keyboard.repeat_delay.into(),
+                        config_.input.keyboard.repeat_rate.into(),
+                    )
+                    .unwrap()
+            }
+            Ok(keyboard) => keyboard,
+        };
+        if config_.input.keyboard.numlock {
+            let mut modifier_state = cua_keyboard.modifier_state();
+            modifier_state.num_lock = true;
+            cua_keyboard.set_modifier_state(modifier_state);
+        }
+
         let cursor_shape_manager_state = CursorShapeManagerState::new::<State>(&display_handle);
         let cursor_manager =
             CursorManager::new(&config_.cursor.xcursor_theme, config_.cursor.xcursor_size);
@@ -2572,6 +2601,7 @@ impl Niri {
             single_pixel_buffer_state,
 
             seat,
+            cua_seat,
             keyboard_focus: KeyboardFocus::Layout { surface: None },
             layer_shell_on_demand_focus: None,
             idle_inhibiting_surfaces: HashSet::new(),

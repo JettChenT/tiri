@@ -20,6 +20,7 @@ static FALLBACK_CURSOR_DATA: &[u8] = include_bytes!("../resources/cursor.rgba");
 
 type XCursorCache = HashMap<(CursorIcon, i32), Option<Rc<XCursor>>>;
 type XCursorNameCache = HashMap<(String, i32, u8), Option<Rc<XCursor>>>;
+type XCursorThemeCache = HashMap<(String, String, i32, u8), Option<Rc<XCursor>>>;
 
 pub struct CursorManager {
     theme: CursorTheme,
@@ -27,6 +28,7 @@ pub struct CursorManager {
     current_cursor: CursorImageStatus,
     named_cursor_cache: RefCell<XCursorCache>,
     named_cursor_by_name_cache: RefCell<XCursorNameCache>,
+    named_cursor_by_theme_cache: RefCell<XCursorThemeCache>,
 }
 
 impl CursorManager {
@@ -41,6 +43,7 @@ impl CursorManager {
             current_cursor: CursorImageStatus::default_named(),
             named_cursor_cache: Default::default(),
             named_cursor_by_name_cache: Default::default(),
+            named_cursor_by_theme_cache: Default::default(),
         }
     }
 
@@ -51,6 +54,7 @@ impl CursorManager {
         self.size = size;
         self.named_cursor_cache.get_mut().clear();
         self.named_cursor_by_name_cache.get_mut().clear();
+        self.named_cursor_by_theme_cache.get_mut().clear();
     }
 
     /// Checks if the cursor WlSurface is alive, and if not, cleans it up.
@@ -160,6 +164,34 @@ impl CursorManager {
 
                 if let Err(err) = &cursor {
                     warn!("error loading xcursor {name}@{cursor_size}: {err:?}");
+                }
+
+                cursor.ok().map(Rc::new)
+            })
+            .clone()
+    }
+
+    /// Get a named cursor from a specific xcursor theme.
+    pub fn get_cursor_with_theme_icon(
+        &self,
+        theme: &str,
+        name: &str,
+        scale: i32,
+        size: Option<u16>,
+    ) -> Option<Rc<XCursor>> {
+        let size = size
+            .and_then(|size| u8::try_from(size).ok())
+            .unwrap_or(self.size);
+        self.named_cursor_by_theme_cache
+            .borrow_mut()
+            .entry((theme.to_owned(), name.to_owned(), scale, size))
+            .or_insert_with_key(|(theme, name, scale, size)| {
+                let cursor_size = i32::from(*size) * scale;
+                let cursor_theme = CursorTheme::load(theme);
+                let cursor = Self::load_xcursor(&cursor_theme, name, cursor_size);
+
+                if let Err(err) = &cursor {
+                    warn!("error loading xcursor {theme}/{name}@{cursor_size}: {err:?}");
                 }
 
                 cursor.ok().map(Rc::new)
