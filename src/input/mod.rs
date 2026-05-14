@@ -815,6 +815,55 @@ impl State {
                     });
                 }
             }
+            Action::CuaScreenshotWindow {
+                id,
+                write_to_disk,
+                notify,
+                path,
+            } => {
+                let mut windows = self.niri.layout.windows();
+                let window = windows.find(|(_, m)| m.id().get() == id);
+                if let Some((Some(monitor), mapped)) = window {
+                    let output = monitor.output();
+                    self.backend.with_primary_renderer(|renderer| {
+                        if let Err(err) = self.niri.cua_screenshot_window(
+                            renderer,
+                            output,
+                            mapped,
+                            write_to_disk,
+                            notify,
+                            path,
+                        ) {
+                            warn!("error taking CUA screenshot: {err:?}");
+                        }
+                    });
+                }
+            }
+            Action::CuaScreenshotWorkspace {
+                id,
+                write_to_disk,
+                notify,
+                path,
+            } => {
+                let workspace = self
+                    .niri
+                    .layout
+                    .workspaces()
+                    .find(|(_, _, ws)| ws.id().get() == id);
+                if let Some((Some(_monitor), _, workspace)) = workspace {
+                    self.backend.with_primary_renderer(|renderer| {
+                        if let Err(err) = self.niri.cua_screenshot_workspace(
+                            renderer,
+                            workspace,
+                            write_to_disk,
+                            notify,
+                            path,
+                        ) {
+                            warn!("error taking CUA workspace screenshot: {err:?}");
+                        }
+                    });
+                }
+            }
             Action::ToggleKeyboardShortcutsInhibit => {
                 if let Some(inhibitor) = self.niri.keyboard_focus.surface().and_then(|surface| {
                     self.niri
@@ -899,6 +948,57 @@ impl State {
             Action::CuaTypeText { id, text } => {
                 if let Err(err) = self.cua_type_text(id, &text) {
                     warn!("failed to send CUA text to window {id}: {err}");
+                }
+            }
+            Action::VirtualCursorMove {
+                cursor_id,
+                x,
+                y,
+                duration_ms,
+            } => {
+                let clock = self.niri.clock.clone();
+                if let Err(err) =
+                    self.niri
+                        .virtual_cursor_ui
+                        .move_cursor(clock, &cursor_id, x, y, duration_ms)
+                {
+                    warn!("failed to move virtual cursor {cursor_id:?}: {err}");
+                } else {
+                    self.niri.queue_redraw_all();
+                }
+            }
+            Action::VirtualCursorClick {
+                cursor_id,
+                button,
+                count,
+            } => match self.niri.virtual_cursor_ui.action_target(&cursor_id) {
+                Ok((id, pos)) => {
+                    if !self.cua_click_button(id, pos.x, pos.y, button, count.max(1)) {
+                        warn!("failed to send virtual cursor click to window {id}");
+                    }
+                }
+                Err(err) => warn!("{err}"),
+            },
+            Action::VirtualCursorScroll {
+                cursor_id,
+                scroll_x,
+                scroll_y,
+            } => match self.niri.virtual_cursor_ui.action_target(&cursor_id) {
+                Ok((id, pos)) => {
+                    if !self.cua_scroll(id, Some(pos.x), Some(pos.y), scroll_x, scroll_y) {
+                        warn!("failed to send virtual cursor scroll to window {id}");
+                    }
+                }
+                Err(err) => warn!("{err}"),
+            },
+            Action::VirtualCursorTypeText { cursor_id, text } => {
+                match self.niri.virtual_cursor_ui.action_target(&cursor_id) {
+                    Ok((id, _)) => {
+                        if let Err(err) = self.cua_type_text(id, &text) {
+                            warn!("failed to send virtual cursor text to window {id}: {err}");
+                        }
+                    }
+                    Err(err) => warn!("{err}"),
                 }
             }
             Action::FocusWindowInColumn(index) => {
@@ -2577,8 +2677,10 @@ impl State {
     }
 
     fn cua_click(&mut self, id: u64, x: f64, y: f64) -> bool {
-        const BTN_LEFT: u32 = 0x110;
+        self.cua_click_button(id, x, y, 0x110, 1)
+    }
 
+    fn cua_click_button(&mut self, id: u64, x: f64, y: f64, button: u32, count: u8) -> bool {
         let Some((surface, pos_within_surface)) = self.cua_pointer_target(id, Some(x), Some(y))
         else {
             return false;
@@ -2588,24 +2690,26 @@ impl State {
             self.cua_motion_to_target(surface, pos_within_surface, time);
         let pointer = self.niri.seat.get_pointer().unwrap();
 
-        pointer.button(
-            self,
-            &ButtonEvent {
-                button: BTN_LEFT,
-                state: ButtonState::Pressed,
-                serial: SERIAL_COUNTER.next_serial(),
-                time,
-            },
-        );
-        pointer.button(
-            self,
-            &ButtonEvent {
-                button: BTN_LEFT,
-                state: ButtonState::Released,
-                serial: SERIAL_COUNTER.next_serial(),
-                time,
-            },
-        );
+        for _ in 0..count {
+            pointer.button(
+                self,
+                &ButtonEvent {
+                    button,
+                    state: ButtonState::Pressed,
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time,
+                },
+            );
+            pointer.button(
+                self,
+                &ButtonEvent {
+                    button,
+                    state: ButtonState::Released,
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time,
+                },
+            );
+        }
         pointer.frame(self);
 
         self.restore_pointer_focus(old_location, old_focus, time);

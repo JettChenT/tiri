@@ -213,6 +213,10 @@ impl MappedId {
         MappedId(MAPPED_ID_COUNTER.next())
     }
 
+    pub fn from_raw(id: u64) -> MappedId {
+        MappedId(id)
+    }
+
     pub fn get(self) -> u64 {
         self.0
     }

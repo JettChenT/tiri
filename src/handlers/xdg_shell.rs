@@ -884,6 +884,7 @@ impl XdgShellHandler for State {
         if let Some(preview_output) = self.niri.window_preview_ui.remove_window(id) {
             self.niri.queue_redraw(&preview_output);
         }
+        self.niri.virtual_cursor_ui.remove_window(id);
 
         if let Some(output) = output {
             self.niri.queue_redraw(&output);

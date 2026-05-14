@@ -146,6 +146,20 @@ pub enum Action {
         notify: bool,
         path: Option<String>,
     },
+    #[knuffel(skip)]
+    CuaScreenshotWindow {
+        id: u64,
+        write_to_disk: bool,
+        notify: bool,
+        path: Option<String>,
+    },
+    #[knuffel(skip)]
+    CuaScreenshotWorkspace {
+        id: u64,
+        write_to_disk: bool,
+        notify: bool,
+        path: Option<String>,
+    },
     ToggleKeyboardShortcutsInhibit,
     CloseWindow,
     #[knuffel(skip)]
@@ -175,6 +189,30 @@ pub enum Action {
     #[knuffel(skip)]
     CuaTypeText {
         id: u64,
+        text: String,
+    },
+    #[knuffel(skip)]
+    VirtualCursorMove {
+        cursor_id: String,
+        x: f64,
+        y: f64,
+        duration_ms: Option<u32>,
+    },
+    #[knuffel(skip)]
+    VirtualCursorClick {
+        cursor_id: String,
+        button: u32,
+        count: u8,
+    },
+    #[knuffel(skip)]
+    VirtualCursorScroll {
+        cursor_id: String,
+        scroll_x: i32,
+        scroll_y: i32,
+    },
+    #[knuffel(skip)]
+    VirtualCursorTypeText {
+        cursor_id: String,
         text: String,
     },
     FocusWindowInColumn(#[knuffel(argument)] u8),
@@ -462,6 +500,28 @@ impl From<niri_ipc::Action> for Action {
                 notify,
                 path,
             },
+            niri_ipc::Action::CuaScreenshotWindow {
+                id,
+                write_to_disk,
+                notify,
+                path,
+            } => Self::CuaScreenshotWindow {
+                id,
+                write_to_disk,
+                notify,
+                path,
+            },
+            niri_ipc::Action::CuaScreenshotWorkspace {
+                id,
+                write_to_disk,
+                notify,
+                path,
+            } => Self::CuaScreenshotWorkspace {
+                id,
+                write_to_disk,
+                notify,
+                path,
+            },
             niri_ipc::Action::ToggleKeyboardShortcutsInhibit {} => {
                 Self::ToggleKeyboardShortcutsInhibit
             }
@@ -491,6 +551,38 @@ impl From<niri_ipc::Action> for Action {
                 scroll_y,
             },
             niri_ipc::Action::CuaTypeText { id, text } => Self::CuaTypeText { id, text },
+            niri_ipc::Action::VirtualCursorMove {
+                cursor_id,
+                x,
+                y,
+                duration_ms,
+            } => Self::VirtualCursorMove {
+                cursor_id,
+                x,
+                y,
+                duration_ms,
+            },
+            niri_ipc::Action::VirtualCursorClick {
+                cursor_id,
+                button,
+                count,
+            } => Self::VirtualCursorClick {
+                cursor_id,
+                button,
+                count,
+            },
+            niri_ipc::Action::VirtualCursorScroll {
+                cursor_id,
+                scroll_x,
+                scroll_y,
+            } => Self::VirtualCursorScroll {
+                cursor_id,
+                scroll_x,
+                scroll_y,
+            },
+            niri_ipc::Action::VirtualCursorTypeText { cursor_id, text } => {
+                Self::VirtualCursorTypeText { cursor_id, text }
+            }
             niri_ipc::Action::FocusWindowInColumn { index } => Self::FocusWindowInColumn(index),
             niri_ipc::Action::FocusWindowPrevious {} => Self::FocusWindowPrevious,
             niri_ipc::Action::FocusColumnLeft {} => Self::FocusColumnLeft,

@@ -171,6 +171,7 @@ use crate::ui::hotkey_overlay::HotkeyOverlay;
 use crate::ui::mru::{MruCloseRequest, WindowMruUi, WindowMruUiRenderElement, WindowPreviewUi};
 use crate::ui::screen_transition::{self, ScreenTransition};
 use crate::ui::screenshot_ui::{OutputScreenshot, ScreenshotUi, ScreenshotUiRenderElement};
+use crate::ui::virtual_cursors::VirtualCursorUi;
 use crate::utils::scale::{closest_representable_scale, guess_monitor_scale};
 use crate::utils::spawning::{CHILD_DISPLAY, CHILD_ENV};
 use crate::utils::vblank_throttle::VBlankThrottle;
@@ -391,6 +392,7 @@ pub struct Niri {
 
     pub window_mru_ui: WindowMruUi,
     pub window_preview_ui: WindowPreviewUi,
+    pub virtual_cursor_ui: VirtualCursorUi,
     pub pending_mru_commit: Option<PendingMruCommit>,
 
     pub pick_window: Option<async_channel::Sender<Option<MappedId>>>,
@@ -2414,6 +2416,7 @@ impl Niri {
         let screenshot_ui = ScreenshotUi::new(animation_clock.clone(), config.clone());
         let window_mru_ui = WindowMruUi::new(config.clone());
         let window_preview_ui = WindowPreviewUi::new(config.clone());
+        let virtual_cursor_ui = VirtualCursorUi::default();
         let config_error_notification =
             ConfigErrorNotification::new(animation_clock.clone(), config.clone());
 
@@ -2608,6 +2611,7 @@ impl Niri {
 
             window_mru_ui,
             window_preview_ui,
+            virtual_cursor_ui,
             pending_mru_commit: None,
 
             pick_window: None,
@@ -3775,6 +3779,29 @@ impl Niri {
         }
     }
 
+    pub fn window_relative_point_on_output(
+        &self,
+        output: &Output,
+        window_id: MappedId,
+        point: Point<f64, Logical>,
+    ) -> Option<Point<f64, Logical>> {
+        let mon = self.layout.monitor_for_output(output)?;
+        let zoom = mon.overview_zoom();
+
+        for (ws, ws_geo) in mon.workspaces_with_render_geo() {
+            for (tile, tile_pos, visible) in ws.tiles_with_render_positions() {
+                if !visible || tile.window().id() != window_id {
+                    continue;
+                }
+
+                let window_pos = tile_pos + tile.window_loc() + point;
+                return Some(ws_geo.loc + window_pos.upscale(zoom));
+            }
+        }
+
+        None
+    }
+
     /// Checks if the pointer should be included on a window cast or screenshot.
     ///
     /// Returns `(cursor_global_pos, win_pos)` if the pointer should be included, or `None`
@@ -4068,6 +4095,7 @@ impl Niri {
         self.exit_confirm_dialog.advance_animations();
         self.screenshot_ui.advance_animations();
         self.window_mru_ui.advance_animations();
+        self.virtual_cursor_ui.advance_animations();
 
         for state in self.output_state.values_mut() {
             if let Some(transition) = &mut state.screen_transition {
@@ -4300,6 +4328,13 @@ impl Niri {
         // Then, shell-requested window previews.
         self.window_preview_ui
             .render_output(self, output, ctx.r(), &mut |elem| push(elem.into()));
+
+        // Then, compositor-rendered virtual cursors pinned to mapped windows. These are part of
+        // the normal desktop render only, below compositor UI and the hardware pointer.
+        if ctx.target == RenderTarget::Output {
+            self.virtual_cursor_ui
+                .render_output(self, output, &mut |elem| push(elem.into()));
+        }
 
         // Don't draw the focus ring on the workspaces while interactively moving above those
         // workspaces, since the interactively-moved window already has a focus ring.
@@ -4616,6 +4651,7 @@ impl Niri {
             state.unfinished_animations_remain |= self.exit_confirm_dialog.are_animations_ongoing();
             state.unfinished_animations_remain |= self.screenshot_ui.are_animations_ongoing();
             state.unfinished_animations_remain |= self.window_mru_ui.are_animations_ongoing();
+            state.unfinished_animations_remain |= self.virtual_cursor_ui.are_animations_ongoing();
             state.unfinished_animations_remain |= state.screen_transition.is_some();
 
             // Also keep redrawing if the current cursor is animated.
@@ -5656,6 +5692,154 @@ impl Niri {
             .context("error saving screenshot")
     }
 
+    pub fn cua_screenshot_window(
+        &self,
+        renderer: &mut GlesRenderer,
+        output: &Output,
+        mapped: &Mapped,
+        write_to_disk: bool,
+        notify: bool,
+        path: Option<String>,
+    ) -> anyhow::Result<()> {
+        let _span = tracy_client::span!("Niri::cua_screenshot_window");
+
+        let scale = Scale::from(output.current_scale().fractional_scale());
+        let alpha =
+            if mapped.sizing_mode().is_fullscreen() || mapped.is_ignoring_opacity_window_rule() {
+                1.
+            } else {
+                mapped.rules().opacity.unwrap_or(1.).clamp(0., 1.)
+            };
+
+        let size = mapped.size().to_f64().to_physical_precise_round(scale);
+        let mut elements: Vec<WindowScreenshotRenderElement<GlesRenderer>> = Vec::new();
+        let ctx = RenderCtx {
+            renderer,
+            target: RenderTarget::ScreenCapture,
+            xray: None,
+        };
+
+        mapped.render_normal(ctx, Point::new(0., 0.), scale, alpha, &mut |elem| {
+            elements.push(elem.into())
+        });
+
+        let pixels = render_to_vec(
+            renderer,
+            size,
+            scale,
+            Transform::Normal,
+            Fourcc::Abgr8888,
+            elements.iter().rev(),
+        )?;
+
+        self.save_screenshot(size, pixels, write_to_disk, path, notify)
+            .context("error saving CUA screenshot")
+    }
+
+    pub fn cua_screenshot_workspace(
+        &self,
+        renderer: &mut GlesRenderer,
+        workspace: &Workspace<Mapped>,
+        write_to_disk: bool,
+        notify: bool,
+        path: Option<String>,
+    ) -> anyhow::Result<()> {
+        let _span = tracy_client::span!("Niri::cua_screenshot_workspace");
+
+        let scale = Scale::from(workspace.scale().fractional_scale());
+        let size = workspace.view_size().to_physical_precise_round(scale);
+        let mut elements: Vec<WorkspaceScreenshotRenderElement<GlesRenderer>> = Vec::new();
+        let padding = 16.;
+        let view_size = workspace.view_size();
+        let windows = workspace
+            .tiles_with_render_positions()
+            .map(|(tile, tile_pos, _visible)| {
+                let mapped = tile.window();
+                let alpha = if mapped.sizing_mode().is_fullscreen()
+                    || mapped.is_ignoring_opacity_window_rule()
+                {
+                    1.
+                } else {
+                    mapped.rules().opacity.unwrap_or(1.).clamp(0., 1.)
+                };
+                let loc = tile_pos + tile.window_loc();
+                let size = mapped.size().to_f64();
+                (mapped, loc, size, alpha)
+            })
+            .collect::<Vec<_>>();
+        let mut ctx = RenderCtx {
+            renderer,
+            target: RenderTarget::ScreenCapture,
+            xray: None,
+        };
+
+        if !windows.is_empty() {
+            let mut min_x = f64::INFINITY;
+            let mut min_y = f64::INFINITY;
+            let mut max_x = f64::NEG_INFINITY;
+            let mut max_y = f64::NEG_INFINITY;
+            for (_, loc, size, _) in &windows {
+                min_x = min_x.min(loc.x);
+                min_y = min_y.min(loc.y);
+                max_x = max_x.max(loc.x + size.w);
+                max_y = max_y.max(loc.y + size.h);
+            }
+
+            let bounds_size: Size<f64, Logical> =
+                Size::from(((max_x - min_x).max(1.), (max_y - min_y).max(1.)));
+            let available: Size<f64, Logical> = Size::from((
+                (view_size.w - padding * 2.).max(1.),
+                (view_size.h - padding * 2.).max(1.),
+            ));
+            let overview_scale = f64::min(
+                1.,
+                f64::min(available.w / bounds_size.w, available.h / bounds_size.h),
+            );
+            let overview_size = bounds_size.upscale(overview_scale);
+            let overview_origin = Point::new(
+                ((view_size.w - overview_size.w) / 2.).max(padding),
+                ((view_size.h - overview_size.h) / 2.).max(padding),
+            );
+
+            for (mapped, loc, _size, alpha) in windows {
+                let target_loc = overview_origin
+                    + Point::new(
+                        (loc.x - min_x) * overview_scale,
+                        (loc.y - min_y) * overview_scale,
+                    );
+                let element_scale = Scale {
+                    x: overview_scale,
+                    y: overview_scale,
+                };
+
+                mapped.render_normal(ctx.r(), Point::new(0., 0.), scale, alpha, &mut |elem| {
+                    let elem =
+                        RescaleRenderElement::from_element(elem, Point::new(0, 0), element_scale);
+                    let elem = RelocateRenderElement::from_element(
+                        elem,
+                        target_loc.to_physical_precise_round(scale),
+                        Relocate::Relative,
+                    );
+                    elements.push(elem.into());
+                });
+            }
+        }
+
+        elements.push(workspace.render_background().into());
+
+        let pixels = render_to_vec(
+            renderer,
+            size,
+            scale,
+            Transform::Normal,
+            Fourcc::Abgr8888,
+            elements.iter().rev(),
+        )?;
+
+        self.save_screenshot(size, pixels, write_to_disk, path, notify)
+            .context("error saving CUA workspace screenshot")
+    }
+
     pub fn save_screenshot(
         &self,
         size: Size<i32, Physical>,
@@ -6529,6 +6713,14 @@ niri_render_elements! {
     WindowScreenshotRenderElement<R> => {
         Layout = LayoutElementRenderElement<R>,
         Pointer = RelocateRenderElement<PointerRenderElements<R>>,
+    }
+}
+
+niri_render_elements! {
+    WorkspaceScreenshotRenderElement<R> => {
+        Layout = LayoutElementRenderElement<R>,
+        RescaledLayout = RelocateRenderElement<RescaleRenderElement<LayoutElementRenderElement<R>>>,
+        SolidColor = SolidColorRenderElement,
     }
 }
 

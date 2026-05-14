@@ -119,6 +119,23 @@ pub enum Request {
     OverviewState,
     /// Request information about screencasts.
     Casts,
+    /// Request information about pinned virtual cursors.
+    VirtualCursors,
+    /// Create a pinned virtual cursor.
+    CreateVirtualCursor {
+        /// Cursor creation request.
+        cursor: VirtualCursorCreate,
+    },
+    /// Update a pinned virtual cursor.
+    UpdateVirtualCursor {
+        /// Cursor update request.
+        cursor: VirtualCursorUpdate,
+    },
+    /// Destroy a pinned virtual cursor.
+    DestroyVirtualCursor {
+        /// Cursor id.
+        cursor_id: String,
+    },
 }
 
 /// Reply from niri to client.
@@ -165,6 +182,17 @@ pub enum Response {
     OverviewState(Overview),
     /// Information about screencasts.
     Casts(Vec<Cast>),
+    /// Information about pinned virtual cursors.
+    VirtualCursors(Vec<VirtualCursor>),
+    /// Information about a created pinned virtual cursor.
+    VirtualCursorCreated(VirtualCursor),
+    /// Information about an updated pinned virtual cursor.
+    VirtualCursorUpdated(VirtualCursor),
+    /// Id of a destroyed pinned virtual cursor.
+    VirtualCursorDestroyed {
+        /// Cursor id.
+        cursor_id: String,
+    },
 }
 
 /// Overview information.
@@ -181,6 +209,173 @@ pub struct Overview {
 pub struct PickedColor {
     /// Color values as red, green, blue, each ranging from 0.0 to 1.0.
     pub rgb: [f64; 3],
+}
+
+/// Pinned virtual cursor state.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct VirtualCursor {
+    /// Cursor id chosen by the client.
+    pub cursor_id: String,
+    /// Id of the mapped window this cursor is pinned to.
+    pub window_id: u64,
+    /// Window-relative X coordinate in logical pixels.
+    pub x: f64,
+    /// Window-relative Y coordinate in logical pixels.
+    pub y: f64,
+    /// Cursor appearance.
+    pub appearance: VirtualCursorAppearance,
+    /// Cursor movement animation.
+    pub animation: VirtualCursorAnimation,
+    /// Whether the cursor is visible.
+    pub visible: bool,
+    /// Ordering among virtual cursors; higher values render above lower values.
+    pub z_index: i32,
+}
+
+/// Request to create a pinned virtual cursor.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct VirtualCursorCreate {
+    /// Cursor id chosen by the client.
+    pub cursor_id: String,
+    /// Id of the mapped window this cursor is pinned to.
+    pub window_id: u64,
+    /// Window-relative X coordinate in logical pixels.
+    pub x: f64,
+    /// Window-relative Y coordinate in logical pixels.
+    pub y: f64,
+    /// Cursor appearance. If unset, tiri uses a visible colored ring.
+    pub appearance: Option<VirtualCursorAppearance>,
+    /// Cursor movement animation. If unset, tiri uses a short ease-out animation.
+    pub animation: Option<VirtualCursorAnimation>,
+    /// Whether the cursor is visible. Defaults to true.
+    pub visible: Option<bool>,
+    /// Ordering among virtual cursors; higher values render above lower values.
+    pub z_index: Option<i32>,
+    /// Whether to replace an existing cursor with the same id.
+    pub replace_existing: bool,
+}
+
+/// Request to update a pinned virtual cursor.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct VirtualCursorUpdate {
+    /// Cursor id chosen by the client.
+    pub cursor_id: String,
+    /// New mapped window id.
+    pub window_id: Option<u64>,
+    /// New window-relative X coordinate in logical pixels.
+    pub x: Option<f64>,
+    /// New window-relative Y coordinate in logical pixels.
+    pub y: Option<f64>,
+    /// New cursor appearance.
+    pub appearance: Option<VirtualCursorAppearance>,
+    /// New cursor movement animation.
+    pub animation: Option<VirtualCursorAnimation>,
+    /// Whether the cursor is visible.
+    pub visible: Option<bool>,
+    /// Ordering among virtual cursors; higher values render above lower values.
+    pub z_index: Option<i32>,
+}
+
+/// Pinned virtual cursor appearance.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub enum VirtualCursorShape {
+    /// Outlined ring cursor.
+    Ring,
+    /// Crosshair cursor.
+    Crosshair,
+    /// Dot cursor.
+    Dot,
+    /// Simple arrow cursor.
+    Arrow,
+}
+
+/// RGBA color in unpremultiplied linear components, each from 0.0 to 1.0.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct RgbaColor {
+    /// Red component.
+    pub r: f32,
+    /// Green component.
+    pub g: f32,
+    /// Blue component.
+    pub b: f32,
+    /// Alpha component.
+    pub a: f32,
+}
+
+/// Pinned virtual cursor appearance.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct VirtualCursorAppearance {
+    /// Built-in cursor shape.
+    pub shape: VirtualCursorShape,
+    /// Cursor size in logical pixels.
+    pub size: u16,
+    /// Cursor fill color.
+    pub color: RgbaColor,
+    /// Cursor outline color.
+    pub outline_color: RgbaColor,
+    /// Cursor opacity multiplier from 0.0 to 1.0.
+    pub opacity: f32,
+}
+
+/// Pinned virtual cursor animation settings.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct VirtualCursorAnimation {
+    /// Movement duration in milliseconds.
+    pub duration_ms: u32,
+    /// Movement easing curve.
+    pub curve: VirtualCursorCurve,
+}
+
+/// Pinned virtual cursor movement curve.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub enum VirtualCursorCurve {
+    /// Linear interpolation.
+    Linear,
+    /// Cubic ease-out interpolation.
+    EaseOutCubic,
+    /// Cubic ease-in-out interpolation.
+    EaseInOutCubic,
+}
+
+impl Default for VirtualCursorAppearance {
+    fn default() -> Self {
+        Self {
+            shape: VirtualCursorShape::Ring,
+            size: 28,
+            color: RgbaColor {
+                r: 0.18,
+                g: 0.83,
+                b: 0.75,
+                a: 0.95,
+            },
+            outline_color: RgbaColor {
+                r: 0.02,
+                g: 0.03,
+                b: 0.04,
+                a: 0.85,
+            },
+            opacity: 1.,
+        }
+    }
+}
+
+impl Default for VirtualCursorAnimation {
+    fn default() -> Self {
+        Self {
+            duration_ms: 180,
+            curve: VirtualCursorCurve::EaseOutCubic,
+        }
+    }
 }
 
 /// Actions that niri can perform.
@@ -287,6 +482,52 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set))]
         path: Option<String>,
     },
+    /// Screenshot a window in the same coordinate space used by computer-use actions.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Screenshot a window aligned to computer-use click coordinates")
+    )]
+    CuaScreenshotWindow {
+        /// Id of the window to screenshot.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: u64,
+        /// Write the screenshot to disk in addition to putting it in your clipboard.
+        #[cfg_attr(feature = "clap", arg(short = 'd', long, action = clap::ArgAction::Set, default_value_t = true))]
+        write_to_disk: bool,
+        /// Whether to show a desktop notification after capturing.
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        notify: bool,
+        /// Path to save the screenshot to.
+        ///
+        /// The path must be absolute, otherwise an error is returned.
+        ///
+        /// If `None`, the screenshot is saved according to the `screenshot-path` config setting.
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set))]
+        path: Option<String>,
+    },
+    /// Screenshot a workspace as a single computer-use overview image.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Screenshot a workspace as one computer-use overview image")
+    )]
+    CuaScreenshotWorkspace {
+        /// Id of the workspace to screenshot.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: u64,
+        /// Write the screenshot to disk in addition to putting it in your clipboard.
+        #[cfg_attr(feature = "clap", arg(short = 'd', long, action = clap::ArgAction::Set, default_value_t = true))]
+        write_to_disk: bool,
+        /// Whether to show a desktop notification after capturing.
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        notify: bool,
+        /// Path to save the screenshot to.
+        ///
+        /// The path must be absolute, otherwise an error is returned.
+        ///
+        /// If `None`, the screenshot is saved according to the `screenshot-path` config setting.
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set))]
+        path: Option<String>,
+    },
     /// Enable or disable the keyboard shortcuts inhibitor (if any) for the focused surface.
     ToggleKeyboardShortcutsInhibit {},
     /// Close a window.
@@ -363,6 +604,54 @@ pub enum Action {
         /// Id of the window to type into.
         #[cfg_attr(feature = "clap", arg(long))]
         id: u64,
+        /// Text to type.
+        #[cfg_attr(feature = "clap", arg(long))]
+        text: String,
+    },
+    /// Move a pinned virtual cursor to a new window-relative coordinate.
+    VirtualCursorMove {
+        /// Cursor id.
+        #[cfg_attr(feature = "clap", arg(long))]
+        cursor_id: String,
+        /// Window-relative X coordinate in logical pixels.
+        #[cfg_attr(feature = "clap", arg(long))]
+        x: f64,
+        /// Window-relative Y coordinate in logical pixels.
+        #[cfg_attr(feature = "clap", arg(long))]
+        y: f64,
+        /// Optional movement duration in milliseconds.
+        #[cfg_attr(feature = "clap", arg(long))]
+        duration_ms: Option<u32>,
+    },
+    /// Click through a pinned virtual cursor without changing visible compositor focus.
+    VirtualCursorClick {
+        /// Cursor id.
+        #[cfg_attr(feature = "clap", arg(long))]
+        cursor_id: String,
+        /// Linux input button code. Defaults to BTN_LEFT.
+        #[cfg_attr(feature = "clap", arg(long, default_value_t = 0x110))]
+        button: u32,
+        /// Click count.
+        #[cfg_attr(feature = "clap", arg(long, default_value_t = 1))]
+        count: u8,
+    },
+    /// Scroll through a pinned virtual cursor without changing visible compositor focus.
+    VirtualCursorScroll {
+        /// Cursor id.
+        #[cfg_attr(feature = "clap", arg(long))]
+        cursor_id: String,
+        /// Horizontal wheel ticks. Positive values scroll right.
+        #[cfg_attr(feature = "clap", arg(long, default_value_t = 0))]
+        scroll_x: i32,
+        /// Vertical wheel ticks. Positive values scroll down.
+        #[cfg_attr(feature = "clap", arg(long, default_value_t = 0))]
+        scroll_y: i32,
+    },
+    /// Send text to the window pinned under a virtual cursor.
+    VirtualCursorTypeText {
+        /// Cursor id.
+        #[cfg_attr(feature = "clap", arg(long))]
+        cursor_id: String,
         /// Text to type.
         #[cfg_attr(feature = "clap", arg(long))]
         text: String,

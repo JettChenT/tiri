@@ -8,7 +8,9 @@ use niri_config::OutputName;
 use niri_ipc::socket::Socket;
 use niri_ipc::{
     Action, Cast, CastKind, CastTarget, Event, KeyboardLayouts, LogicalOutput, Mode, Output,
-    OutputConfigChanged, Overview, Request, Response, Transform, Window, WindowLayout,
+    OutputConfigChanged, Overview, Request, Response, RgbaColor, Transform, VirtualCursorAnimation,
+    VirtualCursorAppearance, VirtualCursorCreate, VirtualCursorCurve, VirtualCursorUpdate, Window,
+    WindowLayout,
 };
 use serde_json::json;
 
@@ -21,7 +23,9 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
         action:
             Action::Screenshot { path, .. }
             | Action::ScreenshotScreen { path, .. }
-            | Action::ScreenshotWindow { path, .. },
+            | Action::ScreenshotWindow { path, .. }
+            | Action::CuaScreenshotWindow { path, .. }
+            | Action::CuaScreenshotWorkspace { path, .. },
     } = &mut msg
     {
         if let Some(path) = path {
@@ -49,6 +53,108 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
         Msg::RequestError => Request::ReturnError,
         Msg::OverviewState => Request::OverviewState,
         Msg::Casts => Request::Casts,
+        Msg::VirtualCursors => Request::VirtualCursors,
+        Msg::CreateVirtualCursor {
+            cursor_id,
+            window_id,
+            x,
+            y,
+            shape,
+            size,
+            color,
+            outline_color,
+            duration_ms,
+            replace_existing,
+        } => Request::CreateVirtualCursor {
+            cursor: VirtualCursorCreate {
+                cursor_id: cursor_id.clone(),
+                window_id: *window_id,
+                x: *x,
+                y: *y,
+                appearance: Some(VirtualCursorAppearance {
+                    shape: *shape,
+                    size: *size,
+                    color: parse_rgba_color_opt(color.as_deref())?.unwrap_or(RgbaColor {
+                        r: 0.18,
+                        g: 0.83,
+                        b: 0.75,
+                        a: 0.95,
+                    }),
+                    outline_color: parse_rgba_color_opt(outline_color.as_deref())?.unwrap_or(
+                        RgbaColor {
+                            r: 0.02,
+                            g: 0.03,
+                            b: 0.04,
+                            a: 0.85,
+                        },
+                    ),
+                    opacity: 1.,
+                }),
+                animation: Some(VirtualCursorAnimation {
+                    duration_ms: *duration_ms,
+                    curve: VirtualCursorCurve::EaseOutCubic,
+                }),
+                visible: Some(true),
+                z_index: Some(0),
+                replace_existing: *replace_existing,
+            },
+        },
+        Msg::UpdateVirtualCursor {
+            cursor_id,
+            window_id,
+            x,
+            y,
+            shape,
+            size,
+            color,
+            outline_color,
+            duration_ms,
+            visible,
+            z_index,
+        } => Request::UpdateVirtualCursor {
+            cursor: VirtualCursorUpdate {
+                cursor_id: cursor_id.clone(),
+                window_id: *window_id,
+                x: *x,
+                y: *y,
+                appearance: if shape.is_some()
+                    || size.is_some()
+                    || color.is_some()
+                    || outline_color.is_some()
+                {
+                    Some(VirtualCursorAppearance {
+                        shape: (*shape).unwrap_or(niri_ipc::VirtualCursorShape::Ring),
+                        size: (*size).unwrap_or(28),
+                        color: parse_rgba_color_opt(color.as_deref())?.unwrap_or(RgbaColor {
+                            r: 0.18,
+                            g: 0.83,
+                            b: 0.75,
+                            a: 0.95,
+                        }),
+                        outline_color: parse_rgba_color_opt(outline_color.as_deref())?.unwrap_or(
+                            RgbaColor {
+                                r: 0.02,
+                                g: 0.03,
+                                b: 0.04,
+                                a: 0.85,
+                            },
+                        ),
+                        opacity: 1.,
+                    })
+                } else {
+                    None
+                },
+                animation: (*duration_ms).map(|duration_ms| VirtualCursorAnimation {
+                    duration_ms,
+                    curve: VirtualCursorCurve::EaseOutCubic,
+                }),
+                visible: *visible,
+                z_index: *z_index,
+            },
+        },
+        Msg::DestroyVirtualCursor { cursor_id } => Request::DestroyVirtualCursor {
+            cursor_id: cursor_id.clone(),
+        },
     };
 
     let mut socket = Socket::connect().context("error connecting to the niri socket")?;
@@ -550,6 +656,77 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                 println!();
             }
         }
+        Msg::VirtualCursors => {
+            let Response::VirtualCursors(mut cursors) = response else {
+                bail!("unexpected response: expected VirtualCursors, got {response:?}");
+            };
+
+            if json {
+                let cursors =
+                    serde_json::to_string(&cursors).context("error formatting response")?;
+                println!("{cursors}");
+                return Ok(());
+            }
+
+            if cursors.is_empty() {
+                println!("No virtual cursors.");
+                return Ok(());
+            }
+
+            cursors.sort_by(|a, b| a.cursor_id.cmp(&b.cursor_id));
+            for cursor in cursors {
+                println!(
+                    "{}: window {} at ({:.1}, {:.1}), {:?}, size {}, visible {}",
+                    cursor.cursor_id,
+                    cursor.window_id,
+                    cursor.x,
+                    cursor.y,
+                    cursor.appearance.shape,
+                    cursor.appearance.size,
+                    cursor.visible
+                );
+            }
+        }
+        Msg::CreateVirtualCursor { .. } => {
+            let Response::VirtualCursorCreated(cursor) = response else {
+                bail!("unexpected response: expected VirtualCursorCreated, got {response:?}");
+            };
+
+            if json {
+                let cursor = serde_json::to_string(&cursor).context("error formatting response")?;
+                println!("{cursor}");
+                return Ok(());
+            }
+
+            println!("Created virtual cursor {}.", cursor.cursor_id);
+        }
+        Msg::UpdateVirtualCursor { .. } => {
+            let Response::VirtualCursorUpdated(cursor) = response else {
+                bail!("unexpected response: expected VirtualCursorUpdated, got {response:?}");
+            };
+
+            if json {
+                let cursor = serde_json::to_string(&cursor).context("error formatting response")?;
+                println!("{cursor}");
+                return Ok(());
+            }
+
+            println!("Updated virtual cursor {}.", cursor.cursor_id);
+        }
+        Msg::DestroyVirtualCursor { .. } => {
+            let Response::VirtualCursorDestroyed { cursor_id } = response else {
+                bail!("unexpected response: expected VirtualCursorDestroyed, got {response:?}");
+            };
+
+            if json {
+                let response =
+                    serde_json::to_string(&cursor_id).context("error formatting response")?;
+                println!("{response}");
+                return Ok(());
+            }
+
+            println!("Destroyed virtual cursor {cursor_id}.");
+        }
     }
 
     Ok(())
@@ -794,6 +971,40 @@ fn ensure_absolute_path(path: &mut String) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn parse_rgba_color_opt(color: Option<&str>) -> anyhow::Result<Option<RgbaColor>> {
+    color.map(parse_rgba_color).transpose()
+}
+
+fn parse_rgba_color(color: &str) -> anyhow::Result<RgbaColor> {
+    let hex = color
+        .strip_prefix('#')
+        .ok_or_else(|| anyhow!("color must start with #"))?;
+    let expanded;
+    let hex = match hex.len() {
+        3 => {
+            expanded = hex
+                .chars()
+                .flat_map(|c| [c, c])
+                .chain(['f', 'f'])
+                .collect::<String>();
+            expanded.as_str()
+        }
+        6 => {
+            expanded = format!("{hex}ff");
+            expanded.as_str()
+        }
+        8 => hex,
+        _ => bail!("color must be #rgb, #rrggbb, or #rrggbbaa"),
+    };
+
+    let value = u32::from_str_radix(hex, 16).context("error parsing color")?;
+    let r = ((value >> 24) & 0xff) as f32 / 255.;
+    let g = ((value >> 16) & 0xff) as f32 / 255.;
+    let b = ((value >> 8) & 0xff) as f32 / 255.;
+    let a = (value & 0xff) as f32 / 255.;
+    Ok(RgbaColor { r, g, b, a })
 }
 
 #[cfg(test)]

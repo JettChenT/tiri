@@ -455,6 +455,78 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             let casts = state.casts.casts.values().cloned().collect();
             Response::Casts(casts)
         }
+        Request::VirtualCursors => {
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let _ = tx.send_blocking(state.niri.virtual_cursor_ui.list());
+            });
+            let cursors = rx
+                .recv()
+                .await
+                .map_err(|_| String::from("error getting virtual cursors"))?;
+            Response::VirtualCursors(cursors)
+        }
+        Request::CreateVirtualCursor { cursor } => {
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let clock = state.niri.clock.clone();
+                let rv = state
+                    .niri
+                    .virtual_cursor_ui
+                    .create(clock, cursor)
+                    .map_err(|err| err.to_string());
+                if rv.is_ok() {
+                    state.niri.queue_redraw_all();
+                }
+                let _ = tx.send_blocking(rv);
+            });
+            let cursor = rx
+                .recv()
+                .await
+                .map_err(|_| String::from("error creating virtual cursor"))??;
+            Response::VirtualCursorCreated(cursor)
+        }
+        Request::UpdateVirtualCursor { cursor } => {
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let clock = state.niri.clock.clone();
+                let rv = state
+                    .niri
+                    .virtual_cursor_ui
+                    .update(clock, cursor)
+                    .map_err(|err| err.to_string());
+                if rv.is_ok() {
+                    state.niri.queue_redraw_all();
+                }
+                let _ = tx.send_blocking(rv);
+            });
+            let cursor = rx
+                .recv()
+                .await
+                .map_err(|_| String::from("error updating virtual cursor"))??;
+            Response::VirtualCursorUpdated(cursor)
+        }
+        Request::DestroyVirtualCursor { cursor_id } => {
+            let response_cursor_id = cursor_id.clone();
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let rv = state
+                    .niri
+                    .virtual_cursor_ui
+                    .destroy(&cursor_id)
+                    .map_err(|err| err.to_string());
+                if rv.is_ok() {
+                    state.niri.queue_redraw_all();
+                }
+                let _ = tx.send_blocking(rv);
+            });
+            rx.recv()
+                .await
+                .map_err(|_| String::from("error destroying virtual cursor"))??;
+            Response::VirtualCursorDestroyed {
+                cursor_id: response_cursor_id,
+            }
+        }
     };
 
     Ok(response)
@@ -464,6 +536,8 @@ fn validate_action(action: &Action) -> Result<(), String> {
     if let Action::Screenshot { path, .. }
     | Action::ScreenshotScreen { path, .. }
     | Action::ScreenshotWindow { path, .. }
+    | Action::CuaScreenshotWindow { path, .. }
+    | Action::CuaScreenshotWorkspace { path, .. }
     | Action::LoadConfigFile { path } = action
     {
         if let Some(path) = path {

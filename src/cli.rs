@@ -112,6 +112,83 @@ pub enum Msg {
     OverviewState,
     /// List screencasts.
     Casts,
+    /// List pinned virtual cursors.
+    VirtualCursors,
+    /// Create a pinned virtual cursor.
+    CreateVirtualCursor {
+        /// Cursor id.
+        #[arg(long)]
+        cursor_id: String,
+        /// Mapped window id.
+        #[arg(long)]
+        window_id: u64,
+        /// Window-relative X coordinate in logical pixels.
+        #[arg(long)]
+        x: f64,
+        /// Window-relative Y coordinate in logical pixels.
+        #[arg(long)]
+        y: f64,
+        /// Built-in cursor shape.
+        #[arg(long, default_value = "ring")]
+        shape: niri_ipc::VirtualCursorShape,
+        /// Cursor size in logical pixels.
+        #[arg(long, default_value_t = 28)]
+        size: u16,
+        /// Cursor color, as #rgb, #rrggbb, or #rrggbbaa.
+        #[arg(long)]
+        color: Option<String>,
+        /// Cursor outline color, as #rgb, #rrggbb, or #rrggbbaa.
+        #[arg(long)]
+        outline_color: Option<String>,
+        /// Cursor movement duration in milliseconds.
+        #[arg(long, default_value_t = 180)]
+        duration_ms: u32,
+        /// Replace an existing cursor with the same id.
+        #[arg(long)]
+        replace_existing: bool,
+    },
+    /// Update a pinned virtual cursor.
+    UpdateVirtualCursor {
+        /// Cursor id.
+        #[arg(long)]
+        cursor_id: String,
+        /// New mapped window id.
+        #[arg(long)]
+        window_id: Option<u64>,
+        /// New window-relative X coordinate in logical pixels.
+        #[arg(long)]
+        x: Option<f64>,
+        /// New window-relative Y coordinate in logical pixels.
+        #[arg(long)]
+        y: Option<f64>,
+        /// Built-in cursor shape.
+        #[arg(long)]
+        shape: Option<niri_ipc::VirtualCursorShape>,
+        /// Cursor size in logical pixels.
+        #[arg(long)]
+        size: Option<u16>,
+        /// Cursor color, as #rgb, #rrggbb, or #rrggbbaa.
+        #[arg(long)]
+        color: Option<String>,
+        /// Cursor outline color, as #rgb, #rrggbb, or #rrggbbaa.
+        #[arg(long)]
+        outline_color: Option<String>,
+        /// Cursor movement duration in milliseconds.
+        #[arg(long)]
+        duration_ms: Option<u32>,
+        /// Show or hide the cursor.
+        #[arg(long)]
+        visible: Option<bool>,
+        /// Cursor z-index.
+        #[arg(long)]
+        z_index: Option<i32>,
+    },
+    /// Destroy a pinned virtual cursor.
+    DestroyVirtualCursor {
+        /// Cursor id.
+        #[arg(long)]
+        cursor_id: String,
+    },
 }
 
 #[derive(Clone, Debug, clap::ValueEnum)]

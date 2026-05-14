@@ -298,6 +298,7 @@ impl CompositorHandler for State {
                     if let Some(output) = self.niri.window_preview_ui.remove_window(id) {
                         self.niri.queue_redraw(&output);
                     }
+                    self.niri.virtual_cursor_ui.remove_window(id);
                     self.niri.layout.remove_window(&window, transaction.clone());
                     self.add_default_dmabuf_pre_commit_hook(surface);
 
