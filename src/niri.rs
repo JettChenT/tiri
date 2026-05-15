@@ -166,6 +166,7 @@ use crate::render_helpers::{
 #[cfg(feature = "xdp-gnome-screencast")]
 use crate::screencasting::Screencasting;
 use crate::ui::config_error_notification::ConfigErrorNotification;
+use crate::ui::cursor_overlays::CursorOverlayUi;
 use crate::ui::exit_confirm_dialog::{ExitConfirmDialog, ExitConfirmDialogRenderElement};
 use crate::ui::hotkey_overlay::HotkeyOverlay;
 use crate::ui::mru::{MruCloseRequest, WindowMruUi, WindowMruUiRenderElement, WindowPreviewUi};
@@ -393,7 +394,11 @@ pub struct Niri {
 
     pub window_mru_ui: WindowMruUi,
     pub window_preview_ui: WindowPreviewUi,
+    pub cursor_overlay_ui: CursorOverlayUi,
     pub virtual_cursor_ui: VirtualCursorUi,
+    pub remote_windows: HashMap<u64, niri_ipc::RemoteWindow>,
+    pub shared_window_streams: HashMap<u64, niri_ipc::SharedWindowStream>,
+    pub next_remote_window_id: u64,
     pub pending_mru_commit: Option<PendingMruCommit>,
 
     pub pick_window: Option<async_channel::Sender<Option<MappedId>>>,
@@ -1203,6 +1208,29 @@ impl State {
                 })
             };
 
+            let cursor_overlay_focus = || {
+                layers.layers_on(Layer::Overlay).find_map(|surface| {
+                    if !self.niri.cursor_overlay_ui.wants_keyboard_focus(surface) {
+                        return None;
+                    }
+
+                    if surface.cached_state().keyboard_interactivity
+                        == wlr_layer::KeyboardInteractivity::None
+                    {
+                        return None;
+                    }
+
+                    let mapped = self.niri.mapped_layer_surfaces.get(surface)?;
+                    if mapped.place_within_backdrop() {
+                        return None;
+                    }
+
+                    Some(KeyboardFocus::LayerShell {
+                        surface: surface.wl_surface().clone(),
+                    })
+                })
+            };
+
             // Prefer exclusive focus on a layer, then check on-demand focus.
             let focus_on_layer =
                 |layer| excl_focus_on_layer(layer).or_else(|| on_d_focus_on_layer(layer));
@@ -1220,6 +1248,7 @@ impl State {
                 surface = surface.or_else(|| grab_on_layer(Layer::Background));
             }
 
+            surface = surface.or_else(cursor_overlay_focus);
             surface = surface.or_else(|| focus_on_layer(Layer::Overlay));
 
             if mon.render_above_top_layer() {
@@ -2432,6 +2461,7 @@ impl Niri {
             modifier_state.num_lock = true;
             cua_keyboard.set_modifier_state(modifier_state);
         }
+        cua_seat.add_pointer();
 
         let cursor_shape_manager_state = CursorShapeManagerState::new::<State>(&display_handle);
         let cursor_manager =
@@ -2445,6 +2475,7 @@ impl Niri {
         let screenshot_ui = ScreenshotUi::new(animation_clock.clone(), config.clone());
         let window_mru_ui = WindowMruUi::new(config.clone());
         let window_preview_ui = WindowPreviewUi::new(config.clone());
+        let cursor_overlay_ui = CursorOverlayUi::default();
         let virtual_cursor_ui = VirtualCursorUi::default();
         let config_error_notification =
             ConfigErrorNotification::new(animation_clock.clone(), config.clone());
@@ -2641,7 +2672,11 @@ impl Niri {
 
             window_mru_ui,
             window_preview_ui,
+            cursor_overlay_ui,
             virtual_cursor_ui,
+            remote_windows: HashMap::new(),
+            shared_window_streams: HashMap::new(),
+            next_remote_window_id: 1,
             pending_mru_commit: None,
 
             pick_window: None,
@@ -3369,11 +3404,20 @@ impl Niri {
         }
 
         let layers = layer_map_for_output(output);
+        let cursor_overlay_under = || {
+            self.cursor_overlay_ui
+                .surface_under(self, output, &layers, pos_within_output)
+                .map(|(surface, layer)| (Some(surface), (None, Some(layer))))
+        };
         let layer_surface_under = |layer, popup| {
             layers
                 .layers_on(layer)
                 .rev()
                 .find_map(|layer_surface| {
+                    if self.cursor_overlay_ui.is_claimed(layer_surface) {
+                        return None;
+                    }
+
                     let mapped = self.mapped_layer_surfaces.get(layer_surface)?;
                     if mapped.place_within_backdrop() {
                         return None;
@@ -3444,8 +3488,9 @@ impl Niri {
 
         let mon = self.layout.monitor_for_output(output).unwrap();
 
-        let mut under =
-            layer_popup_under(Layer::Overlay).or_else(|| layer_toplevel_under(Layer::Overlay));
+        let mut under = cursor_overlay_under()
+            .or_else(|| layer_popup_under(Layer::Overlay))
+            .or_else(|| layer_toplevel_under(Layer::Overlay));
 
         let is_overview_open = self.layout.is_overview_open();
 
@@ -3648,6 +3693,90 @@ impl Niri {
             .map(|(_, m)| m.window.clone())
     }
 
+    pub fn share_window_stream(
+        &mut self,
+        id: u64,
+        stream_id: Option<String>,
+    ) -> Result<(), String> {
+        let mapped_id = MappedId::from_raw(id);
+        if self.find_window_by_id(mapped_id).is_none() {
+            return Err(format!("window {id} not found"));
+        }
+
+        let stream_id = stream_id.unwrap_or_else(|| format!("local-window-{id}"));
+        self.shared_window_streams.insert(
+            id,
+            niri_ipc::SharedWindowStream {
+                window_id: id,
+                stream_id,
+            },
+        );
+        Ok(())
+    }
+
+    pub fn stop_window_stream(&mut self, id: u64) {
+        self.shared_window_streams.remove(&id);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_remote_window(
+        &mut self,
+        peer_id: String,
+        remote_window_id: u64,
+        remote_workspace_id: Option<u64>,
+        title: String,
+        app_id: Option<String>,
+        width: u32,
+        height: u32,
+        stream_id: String,
+    ) -> u64 {
+        if let Some(existing) = self
+            .remote_windows
+            .values_mut()
+            .find(|window| window.peer_id == peer_id && window.remote_window_id == remote_window_id)
+        {
+            existing.remote_workspace_id = remote_workspace_id;
+            existing.title = title;
+            existing.app_id = app_id;
+            existing.size = (width, height);
+            existing.stream_id = stream_id;
+            return existing.id;
+        }
+
+        let id = self.next_remote_window_id;
+        self.next_remote_window_id = self.next_remote_window_id.saturating_add(1).max(1);
+        self.remote_windows.insert(
+            id,
+            niri_ipc::RemoteWindow {
+                id,
+                peer_id,
+                remote_window_id,
+                remote_workspace_id,
+                title,
+                app_id,
+                size: (width, height),
+                stream_id,
+                is_focused: false,
+            },
+        );
+        id
+    }
+
+    pub fn focus_remote_window(&mut self, id: u64) -> Result<(), String> {
+        if !self.remote_windows.contains_key(&id) {
+            return Err(format!("remote window {id} not found"));
+        }
+
+        for window in self.remote_windows.values_mut() {
+            window.is_focused = window.id == id;
+        }
+        Ok(())
+    }
+
+    pub fn close_remote_window(&mut self, id: u64) {
+        self.remote_windows.remove(&id);
+    }
+
     pub fn output_for_tablet(&self) -> Option<&Output> {
         let config = self.config.borrow();
         if config.input.tablet.map_to_focused_output {
@@ -3792,6 +3921,34 @@ impl Niri {
                     }
                 }
             }
+            RenderCursor::Themed {
+                cache_name,
+                scale,
+                cursor,
+            } => {
+                let (idx, frame) = cursor.frame(self.start_time.elapsed().as_millis() as u32);
+                let hotspot = XCursor::hotspot(frame).to_logical(scale);
+                let pointer_pos =
+                    (pointer_pos - hotspot.to_f64()).to_physical_precise_round(output_scale);
+
+                let texture = self
+                    .cursor_texture_cache
+                    .get_named(&cache_name, scale, &cursor, idx);
+                match MemoryRenderBufferRenderElement::from_buffer(
+                    renderer,
+                    pointer_pos,
+                    &texture,
+                    None,
+                    None,
+                    None,
+                    Kind::Cursor,
+                ) {
+                    Ok(element) => push(element.into()),
+                    Err(err) => {
+                        warn!("error importing a cursor texture: {err:?}");
+                    }
+                }
+            }
         }
 
         if let Some(dnd_icon) = self.dnd_icon.as_ref() {
@@ -3826,6 +3983,39 @@ impl Niri {
 
                 let window_pos = tile_pos + tile.window_loc() + point;
                 return Some(ws_geo.loc + window_pos.upscale(zoom));
+            }
+        }
+
+        None
+    }
+
+    pub fn hardware_pointer_position_in_window(
+        &self,
+        window_id: MappedId,
+    ) -> Option<Point<f64, Logical>> {
+        let pointer_pos = self
+            .tablet_cursor_location
+            .unwrap_or_else(|| self.seat.get_pointer().unwrap().current_location());
+
+        for output in self.global_space.outputs() {
+            let output_geo = self.global_space.output_geometry(output)?;
+            if !output_geo.contains(pointer_pos.to_i32_round()) {
+                continue;
+            }
+
+            let point_on_output = pointer_pos - output_geo.loc.to_f64();
+            let mon = self.layout.monitor_for_output(output)?;
+            let zoom = mon.overview_zoom();
+
+            for (ws, ws_geo) in mon.workspaces_with_render_geo() {
+                for (tile, tile_pos, visible) in ws.tiles_with_render_positions() {
+                    if !visible || tile.window().id() != window_id {
+                        continue;
+                    }
+
+                    let point_in_workspace = (point_on_output - ws_geo.loc).downscale(zoom);
+                    return Some(point_in_workspace - tile_pos - tile.window_loc());
+                }
             }
         }
 
@@ -4371,6 +4561,17 @@ impl Niri {
             );
         }
 
+        // Then, cursor-anchored client overlays. They are regular layer-shell surfaces whose
+        // compositor placement is driven by the hardware pointer or a virtual cursor. This render
+        // list is top-to-bottom, so virtual cursors stay visible above their overlays.
+        if ctx.target == RenderTarget::Output {
+            let layer_map = layer_map_for_output(output);
+            self.cursor_overlay_ui
+                .render_output(self, output, &layer_map, ctx.r(), &mut |elem| {
+                    push(elem.into())
+                });
+        }
+
         // Don't draw the focus ring on the workspaces while interactively moving above those
         // workspaces, since the interactively-moved window already has a focus ring.
         let focus_ring = !self.layout.interactive_move_is_moving_above_output(output);
@@ -4613,6 +4814,10 @@ impl Niri {
     ) -> impl Iterator<Item = (&'a MappedLayer, Rectangle<i32, Logical>)> {
         // LayerMap returns layers in reverse stacking order.
         layer_map.layers_on(layer).rev().filter_map(move |surface| {
+            if self.cursor_overlay_ui.is_claimed(surface) {
+                return None;
+            }
+
             let mapped = self.mapped_layer_surfaces.get(surface)?;
 
             if for_backdrop != mapped.place_within_backdrop() {

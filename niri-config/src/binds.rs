@@ -7,7 +7,8 @@ use bitflags::bitflags;
 use knuffel::errors::DecodeError;
 use miette::miette;
 use niri_ipc::{
-    ColumnDisplay, LayoutSwitchTarget, PositionChange, SizeChange, WorkspaceReferenceArg,
+    ColumnDisplay, LayoutSwitchTarget, PositionChange, SizeChange, WorkspaceInsertionPosition,
+    WorkspaceReferenceArg,
 };
 use smithay::input::keyboard::keysyms::KEY_NoSymbol;
 use smithay::input::keyboard::xkb::{keysym_from_name, KEYSYM_CASE_INSENSITIVE, KEYSYM_NO_FLAGS};
@@ -197,6 +198,34 @@ pub enum Action {
         key: String,
     },
     #[knuffel(skip)]
+    ShareWindowStream {
+        id: u64,
+        stream_id: Option<String>,
+    },
+    #[knuffel(skip)]
+    StopWindowStream {
+        id: u64,
+    },
+    #[knuffel(skip)]
+    OpenRemoteWindow {
+        peer_id: String,
+        remote_window_id: u64,
+        remote_workspace_id: Option<u64>,
+        title: String,
+        app_id: Option<String>,
+        width: u32,
+        height: u32,
+        stream_id: String,
+    },
+    #[knuffel(skip)]
+    FocusRemoteWindow {
+        id: u64,
+    },
+    #[knuffel(skip)]
+    CloseRemoteWindow {
+        id: u64,
+    },
+    #[knuffel(skip)]
     VirtualCursorMove {
         cursor_id: String,
         x: f64,
@@ -312,6 +341,15 @@ pub enum Action {
         new_idx: usize,
         reference: WorkspaceReference,
     },
+    #[knuffel(skip)]
+    AddNamedWorkspace {
+        name: String,
+        reference: Option<WorkspaceReference>,
+        position: WorkspaceInsertionPosition,
+        focus: bool,
+    },
+    #[knuffel(skip)]
+    RemoveWorkspace(WorkspaceReference),
     #[knuffel(skip)]
     MoveWorkspaceToMonitorByRef {
         output_name: String,
@@ -442,6 +480,8 @@ pub enum Action {
         y: f64,
         width: f64,
         height: f64,
+        description: Option<String>,
+        backdrop_opacity: Option<f32>,
         output: Option<String>,
     },
     #[knuffel(skip)]
@@ -557,6 +597,31 @@ impl From<niri_ipc::Action> for Action {
             },
             niri_ipc::Action::CuaTypeText { id, text } => Self::CuaTypeText { id, text },
             niri_ipc::Action::CuaPressKey { id, key } => Self::CuaPressKey { id, key },
+            niri_ipc::Action::ShareWindowStream { id, stream_id } => {
+                Self::ShareWindowStream { id, stream_id }
+            }
+            niri_ipc::Action::StopWindowStream { id } => Self::StopWindowStream { id },
+            niri_ipc::Action::OpenRemoteWindow {
+                peer_id,
+                remote_window_id,
+                remote_workspace_id,
+                title,
+                app_id,
+                width,
+                height,
+                stream_id,
+            } => Self::OpenRemoteWindow {
+                peer_id,
+                remote_window_id,
+                remote_workspace_id,
+                title,
+                app_id,
+                width,
+                height,
+                stream_id,
+            },
+            niri_ipc::Action::FocusRemoteWindow { id } => Self::FocusRemoteWindow { id },
+            niri_ipc::Action::CloseRemoteWindow { id } => Self::CloseRemoteWindow { id },
             niri_ipc::Action::VirtualCursorMove {
                 cursor_id,
                 x,
@@ -691,6 +756,20 @@ impl From<niri_ipc::Action> for Action {
             }
             niri_ipc::Action::MoveWorkspaceDown {} => Self::MoveWorkspaceDown,
             niri_ipc::Action::MoveWorkspaceUp {} => Self::MoveWorkspaceUp,
+            niri_ipc::Action::AddNamedWorkspace {
+                name,
+                reference,
+                position,
+                focus,
+            } => Self::AddNamedWorkspace {
+                name,
+                reference: reference.map(WorkspaceReference::from),
+                position,
+                focus,
+            },
+            niri_ipc::Action::RemoveWorkspace { reference } => {
+                Self::RemoveWorkspace(WorkspaceReference::from(reference))
+            }
             niri_ipc::Action::SetWorkspaceName {
                 name,
                 workspace: None,
@@ -857,6 +936,8 @@ impl From<niri_ipc::Action> for Action {
                 y,
                 width,
                 height,
+                description,
+                backdrop_opacity,
                 output,
             } => Self::ShowWindowPreview {
                 id,
@@ -864,6 +945,8 @@ impl From<niri_ipc::Action> for Action {
                 y,
                 width,
                 height,
+                description,
+                backdrop_opacity,
                 output,
             },
             niri_ipc::Action::HideWindowPreview {} => Self::HideWindowPreview,

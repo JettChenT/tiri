@@ -42,6 +42,22 @@ Before, it could only use the connector name.
 
 <sup>Since: 25.01</sup> You can use `set-workspace-name` and `unset-workspace-name` actions to change workspace names dynamically.
 
+You can also create an empty named workspace directly over IPC:
+
+```sh
+niri msg action add-named-workspace "scratch"
+```
+
+By default this inserts the workspace after the focused workspace and focuses it.
+Use `--position before` to insert it before the reference workspace, `--reference` to insert near a different workspace, and `--focus false` to keep focus where it is.
+The name must be unique.
+
+To remove a workspace, it must be empty:
+
+```sh
+niri msg action remove-workspace "scratch"
+```
+
 <sup>Since: 25.02</sup> Named workspaces no longer update/forget their original output when opening a new window on them (unnamed workspaces will keep doing that).
 This means that named workspaces "stick" to their original output in more cases, reflecting their more permanent nature.
 Explicitly moving a named workspace to a different monitor will still update its original output.

@@ -38,10 +38,13 @@ use std::time::Duration;
 
 use monitor::{InsertHint, InsertPosition, InsertWorkspace, MonitorAddWindowTarget};
 use niri_config::utils::MergeWith as _;
+use niri_config::workspace::WorkspaceName;
 use niri_config::{
     Config, CornerRadius, LayoutPart, PresetSize, Workspace as WorkspaceConfig, WorkspaceReference,
 };
-use niri_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
+use niri_ipc::{
+    ColumnDisplay, PositionChange, SizeChange, WindowLayout, WorkspaceInsertionPosition,
+};
 use scrolling::{Column, ColumnWidth};
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::utils::RescaleRenderElement;
@@ -1322,6 +1325,45 @@ impl<W: LayoutElement> Layout<W> {
                 WorkspaceReference::Id(id) => ws.id().get() == *id,
                 WorkspaceReference::Index(_) => unreachable!(),
             })
+        }
+    }
+
+    fn find_monitor_workspace_by_ref(
+        monitors: &[Monitor<W>],
+        active_monitor_idx: usize,
+        reference: WorkspaceReference,
+    ) -> Option<(usize, usize)> {
+        match reference {
+            WorkspaceReference::Index(index) => {
+                let monitor = monitors.get(active_monitor_idx)?;
+                let idx = (index.saturating_sub(1) as usize)
+                    .min(monitor.workspaces.len().saturating_sub(1));
+                Some((active_monitor_idx, idx))
+            }
+            WorkspaceReference::Name(ref_name) => {
+                monitors.iter().enumerate().find_map(|(mon_idx, monitor)| {
+                    monitor
+                        .workspaces
+                        .iter()
+                        .enumerate()
+                        .find(|(_, ws)| {
+                            ws.name
+                                .as_ref()
+                                .is_some_and(|name| name.eq_ignore_ascii_case(&ref_name))
+                        })
+                        .map(|(ws_idx, _)| (mon_idx, ws_idx))
+                })
+            }
+            WorkspaceReference::Id(id) => {
+                monitors.iter().enumerate().find_map(|(mon_idx, monitor)| {
+                    monitor
+                        .workspaces
+                        .iter()
+                        .enumerate()
+                        .find(|(_, ws)| ws.id().get() == id)
+                        .map(|(ws_idx, _)| (mon_idx, ws_idx))
+                })
+            }
         }
     }
 
@@ -4523,6 +4565,149 @@ impl<W: LayoutElement> Layout<W> {
         };
 
         monitor.move_workspace_to_idx(old_idx, new_idx);
+    }
+
+    pub fn add_named_workspace(
+        &mut self,
+        name: String,
+        reference: Option<WorkspaceReference>,
+        position: WorkspaceInsertionPosition,
+        activate: bool,
+    ) -> bool {
+        if name.is_empty() || self.find_workspace_by_name(&name).is_some() {
+            return false;
+        }
+
+        let ws_config = WorkspaceConfig {
+            name: WorkspaceName(name),
+            open_on_output: None,
+            layout: None,
+        };
+        let clock = self.clock.clone();
+        let options = self.options.clone();
+
+        match &mut self.monitor_set {
+            MonitorSet::Normal {
+                monitors,
+                active_monitor_idx,
+                ..
+            } => {
+                let (mon_idx, ref_idx) = if let Some(reference) = reference {
+                    let Some(position) = Self::find_monitor_workspace_by_ref(
+                        monitors,
+                        *active_monitor_idx,
+                        reference,
+                    ) else {
+                        return false;
+                    };
+                    position
+                } else {
+                    let mon = &monitors[*active_monitor_idx];
+                    (*active_monitor_idx, mon.active_workspace_idx)
+                };
+
+                let insert_idx = match position {
+                    WorkspaceInsertionPosition::Before => ref_idx,
+                    WorkspaceInsertionPosition::After => ref_idx + 1,
+                };
+
+                let mon = &mut monitors[mon_idx];
+                let ws =
+                    Workspace::new_with_config(mon.output.clone(), Some(ws_config), clock, options);
+                mon.insert_workspace(ws, insert_idx, activate);
+
+                if activate {
+                    *active_monitor_idx = mon_idx;
+                }
+            }
+            MonitorSet::NoOutputs { workspaces } => {
+                let ref_idx = if let Some(reference) = reference {
+                    match reference {
+                        WorkspaceReference::Index(index) => (index.saturating_sub(1) as usize)
+                            .min(workspaces.len().saturating_sub(1)),
+                        WorkspaceReference::Name(ref_name) => {
+                            let Some((idx, _)) = workspaces.iter().enumerate().find(|(_, ws)| {
+                                ws.name
+                                    .as_ref()
+                                    .is_some_and(|name| name.eq_ignore_ascii_case(&ref_name))
+                            }) else {
+                                return false;
+                            };
+                            idx
+                        }
+                        WorkspaceReference::Id(id) => {
+                            let Some((idx, _)) = workspaces
+                                .iter()
+                                .enumerate()
+                                .find(|(_, ws)| ws.id().get() == id)
+                            else {
+                                return false;
+                            };
+                            idx
+                        }
+                    }
+                } else {
+                    workspaces.len().saturating_sub(1)
+                };
+
+                let insert_idx = match position {
+                    WorkspaceInsertionPosition::Before => ref_idx,
+                    WorkspaceInsertionPosition::After => ref_idx + 1,
+                }
+                .min(workspaces.len());
+
+                let ws = Workspace::new_with_config_no_outputs(Some(ws_config), clock, options);
+                workspaces.insert(insert_idx, ws);
+            }
+        }
+
+        true
+    }
+
+    pub fn remove_workspace(&mut self, reference: WorkspaceReference) -> bool {
+        match &mut self.monitor_set {
+            MonitorSet::Normal {
+                monitors,
+                active_monitor_idx,
+                ..
+            } => {
+                let Some((mon_idx, ws_idx)) =
+                    Self::find_monitor_workspace_by_ref(monitors, *active_monitor_idx, reference)
+                else {
+                    return false;
+                };
+                if monitors[mon_idx].workspaces[ws_idx].has_windows() {
+                    return false;
+                }
+
+                monitors[mon_idx].remove_workspace_by_idx(ws_idx);
+            }
+            MonitorSet::NoOutputs { workspaces } => {
+                let Some(ws_idx) = (match reference {
+                    WorkspaceReference::Index(index) => {
+                        let idx = index.saturating_sub(1) as usize;
+                        (idx < workspaces.len()).then_some(idx)
+                    }
+                    WorkspaceReference::Name(ref_name) => workspaces.iter().position(|ws| {
+                        ws.name
+                            .as_ref()
+                            .is_some_and(|name| name.eq_ignore_ascii_case(&ref_name))
+                    }),
+                    WorkspaceReference::Id(id) => {
+                        workspaces.iter().position(|ws| ws.id().get() == id)
+                    }
+                }) else {
+                    return false;
+                };
+                if workspaces[ws_idx].has_windows() {
+                    return false;
+                }
+
+                workspaces.remove(ws_idx);
+            }
+        }
+
+        true
     }
 
     pub fn set_workspace_name(&mut self, name: String, reference: Option<WorkspaceReference>) {

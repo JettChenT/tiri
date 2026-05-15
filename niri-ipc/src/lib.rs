@@ -119,13 +119,26 @@ pub enum Request {
     OverviewState,
     /// Request information about screencasts.
     Casts,
+    /// Request information about collaboration remote windows.
+    RemoteWindows,
+    /// Request information about locally shared collaboration window streams.
+    SharedWindowStreams,
     /// Request information about pinned virtual cursors.
     VirtualCursors,
+    /// Request information about cursor-anchored overlay surfaces.
+    CursorOverlays,
     /// Create a pinned virtual cursor.
     CreateVirtualCursor {
         /// Cursor creation request.
         cursor: VirtualCursorCreate,
     },
+    /// Temporarily override the rendered hardware pointer cursor.
+    SetHardwareCursor {
+        /// Cursor override request.
+        cursor: HardwareCursorOverride,
+    },
+    /// Clear a temporary hardware pointer cursor override.
+    ClearHardwareCursor,
     /// Update a pinned virtual cursor.
     UpdateVirtualCursor {
         /// Cursor update request.
@@ -135,6 +148,21 @@ pub enum Request {
     DestroyVirtualCursor {
         /// Cursor id.
         cursor_id: String,
+    },
+    /// Register a cursor-anchored overlay surface.
+    RegisterCursorOverlay {
+        /// Overlay registration request.
+        overlay: CursorOverlayRegister,
+    },
+    /// Update a cursor-anchored overlay surface.
+    UpdateCursorOverlay {
+        /// Overlay update request.
+        overlay: CursorOverlayUpdate,
+    },
+    /// Unregister a cursor-anchored overlay surface.
+    UnregisterCursorOverlay {
+        /// Overlay id.
+        overlay_id: String,
     },
 }
 
@@ -182,6 +210,10 @@ pub enum Response {
     OverviewState(Overview),
     /// Information about screencasts.
     Casts(Vec<Cast>),
+    /// Information about collaboration remote windows.
+    RemoteWindows(Vec<RemoteWindow>),
+    /// Information about locally shared collaboration window streams.
+    SharedWindowStreams(Vec<SharedWindowStream>),
     /// Information about pinned virtual cursors.
     VirtualCursors(Vec<VirtualCursor>),
     /// Information about a created pinned virtual cursor.
@@ -193,6 +225,178 @@ pub enum Response {
         /// Cursor id.
         cursor_id: String,
     },
+    /// Information about cursor-anchored overlay surfaces.
+    CursorOverlays(Vec<CursorOverlay>),
+    /// Information about a registered cursor-anchored overlay surface.
+    CursorOverlayRegistered(CursorOverlay),
+    /// Information about an updated cursor-anchored overlay surface.
+    CursorOverlayUpdated(CursorOverlay),
+    /// Id of an unregistered cursor-anchored overlay surface.
+    CursorOverlayUnregistered {
+        /// Overlay id.
+        overlay_id: String,
+    },
+}
+
+/// Cursor-anchored overlay state.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct CursorOverlay {
+    /// Overlay id chosen by the client.
+    pub overlay_id: String,
+    /// Layer-shell namespace to render as the overlay content.
+    pub layer_namespace: String,
+    /// Cursor anchor.
+    pub anchor: CursorOverlayAnchor,
+    /// Placement configuration.
+    pub placement: CursorOverlayPlacement,
+    /// Whether the overlay is visible.
+    pub visible: bool,
+    /// Whether the overlay receives pointer hit-testing at its cursor-anchored visual position.
+    pub interactive: bool,
+    /// Whether the overlay requests keyboard focus while visible.
+    pub keyboard_focus: bool,
+    /// Ordering among cursor overlays; higher values render above lower values.
+    pub z_index: i32,
+    /// Last output on which the overlay resolved, if any.
+    pub resolved_output: Option<String>,
+    /// Last resolved output-local rectangle, if any.
+    pub resolved_rect: Option<CursorOverlayRect>,
+}
+
+/// Request to register a cursor-anchored overlay.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct CursorOverlayRegister {
+    /// Overlay id chosen by the client.
+    pub overlay_id: String,
+    /// Layer-shell namespace to render as the overlay content.
+    pub layer_namespace: String,
+    /// Cursor anchor.
+    pub anchor: CursorOverlayAnchor,
+    /// Placement configuration.
+    pub placement: CursorOverlayPlacement,
+    /// Whether the overlay is visible. Defaults to true.
+    pub visible: Option<bool>,
+    /// Whether the overlay receives pointer hit-testing at its cursor-anchored visual position.
+    pub interactive: Option<bool>,
+    /// Whether the overlay requests keyboard focus while visible.
+    pub keyboard_focus: Option<bool>,
+    /// Ordering among cursor overlays; higher values render above lower values.
+    pub z_index: Option<i32>,
+    /// Whether to replace an existing overlay with the same id.
+    pub replace_existing: bool,
+}
+
+/// Request to update a cursor-anchored overlay.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct CursorOverlayUpdate {
+    /// Overlay id chosen by the client.
+    pub overlay_id: String,
+    /// New layer-shell namespace to render as the overlay content.
+    pub layer_namespace: Option<String>,
+    /// New cursor anchor.
+    pub anchor: Option<CursorOverlayAnchor>,
+    /// New placement configuration.
+    pub placement: Option<CursorOverlayPlacement>,
+    /// Whether the overlay is visible.
+    pub visible: Option<bool>,
+    /// Whether the overlay receives pointer hit-testing at its cursor-anchored visual position.
+    pub interactive: Option<bool>,
+    /// Whether the overlay requests keyboard focus while visible.
+    pub keyboard_focus: Option<bool>,
+    /// Ordering among cursor overlays; higher values render above lower values.
+    pub z_index: Option<i32>,
+}
+
+/// Cursor anchor for an overlay.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub enum CursorOverlayAnchor {
+    /// Anchor to the real hardware pointer.
+    HardwarePointer,
+    /// Anchor to an existing virtual cursor.
+    VirtualCursor {
+        /// Cursor id.
+        cursor_id: String,
+    },
+}
+
+/// Cursor overlay placement.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct CursorOverlayPlacement {
+    /// Preferred side relative to the cursor.
+    pub side: CursorOverlaySide,
+    /// Alignment on the cross axis.
+    pub align: CursorOverlayAlign,
+    /// Gap between cursor and overlay.
+    pub gap: f64,
+    /// Extra X offset after side placement.
+    pub offset_x: f64,
+    /// Extra Y offset after side placement.
+    pub offset_y: f64,
+    /// Padding from output edges.
+    pub edge_padding: f64,
+    /// Whether to try the opposite side before clamping.
+    pub flip: bool,
+}
+
+/// Preferred side for cursor overlay placement.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub enum CursorOverlaySide {
+    /// Place to the right of the cursor.
+    Right,
+    /// Place to the left of the cursor.
+    Left,
+    /// Place above the cursor.
+    Above,
+    /// Place below the cursor.
+    Below,
+}
+
+/// Cross-axis alignment for cursor overlay placement.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub enum CursorOverlayAlign {
+    /// Align the overlay start edge with the cursor.
+    Start,
+    /// Center the overlay on the cursor.
+    Center,
+    /// Align the overlay end edge with the cursor.
+    End,
+}
+
+/// Output-local cursor overlay rectangle.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct CursorOverlayRect {
+    /// Output-local X coordinate.
+    pub x: f64,
+    /// Output-local Y coordinate.
+    pub y: f64,
+    /// Width in logical pixels.
+    pub width: f64,
+    /// Height in logical pixels.
+    pub height: f64,
+}
+
+impl Default for CursorOverlayPlacement {
+    fn default() -> Self {
+        Self {
+            side: CursorOverlaySide::Right,
+            align: CursorOverlayAlign::Start,
+            gap: 10.,
+            offset_x: 0.,
+            offset_y: 0.,
+            edge_padding: 8.,
+            flip: true,
+        }
+    }
 }
 
 /// Overview information.
@@ -255,6 +459,21 @@ pub struct VirtualCursorCreate {
     pub z_index: Option<i32>,
     /// Whether to replace an existing cursor with the same id.
     pub replace_existing: bool,
+    /// Place the cursor at the current hardware pointer location inside `window_id`.
+    #[serde(default)]
+    pub at_pointer: bool,
+}
+
+/// Temporary hardware pointer cursor override.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct HardwareCursorOverride {
+    /// Optional xcursor theme name. If unset, tiri uses the compositor's configured theme.
+    pub theme: Option<String>,
+    /// Optional xcursor icon name. If unset, tiri uses the default pointer icon.
+    pub icon: Option<String>,
+    /// Optional cursor size in logical pixels.
+    pub size: Option<u16>,
 }
 
 /// Request to update a pinned virtual cursor.
@@ -306,6 +525,8 @@ impl Default for VirtualCursorShape {
 pub enum VirtualCursorSource {
     /// Cursor loaded from the compositor's current xcursor theme.
     Theme {
+        /// Optional xcursor theme name. If unset, tiri uses the compositor's configured theme.
+        theme: Option<String>,
         /// Optional xcursor icon name. If unset, tiri uses the default pointer icon.
         icon: Option<String>,
     },
@@ -318,7 +539,10 @@ pub enum VirtualCursorSource {
 
 impl Default for VirtualCursorSource {
     fn default() -> Self {
-        Self::Theme { icon: None }
+        Self::Theme {
+            theme: None,
+            icon: None,
+        }
     }
 }
 
@@ -377,6 +601,17 @@ pub enum VirtualCursorCurve {
     EaseOutCubic,
     /// Cubic ease-in-out interpolation.
     EaseInOutCubic,
+}
+
+/// Where to insert a named workspace relative to another workspace.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub enum WorkspaceInsertionPosition {
+    /// Insert before the reference workspace.
+    Before,
+    /// Insert after the reference workspace.
+    After,
 }
 
 impl Default for VirtualCursorAppearance {
@@ -640,6 +875,69 @@ pub enum Action {
         /// Text to type.
         #[cfg_attr(feature = "clap", arg(long))]
         text: String,
+    },
+    /// Send a computer-use key press to a window without changing compositor layout focus.
+    CuaPressKey {
+        /// Id of the window to send the key to.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: u64,
+        /// Key name to press, for example Enter, Tab, Escape, Backspace, or ArrowLeft.
+        #[cfg_attr(feature = "clap", arg(long))]
+        key: String,
+    },
+    /// Register a local host window as available for a collaboration stream.
+    ShareWindowStream {
+        /// Id of the local window to export.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: u64,
+        /// Optional provider-level stream id. If omitted, tiri will use the window id.
+        #[cfg_attr(feature = "clap", arg(long))]
+        stream_id: Option<String>,
+    },
+    /// Stop exporting a local host window collaboration stream.
+    StopWindowStream {
+        /// Id of the local window whose stream should stop.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: u64,
+    },
+    /// Open or update a viewer-side collaboration remote window.
+    OpenRemoteWindow {
+        /// Stable peer id for the remote machine.
+        #[cfg_attr(feature = "clap", arg(long))]
+        peer_id: String,
+        /// Stable remote window id on that peer.
+        #[cfg_attr(feature = "clap", arg(long))]
+        remote_window_id: u64,
+        /// Optional stable remote workspace id on that peer.
+        #[cfg_attr(feature = "clap", arg(long))]
+        remote_workspace_id: Option<u64>,
+        /// Display title.
+        #[cfg_attr(feature = "clap", arg(long))]
+        title: String,
+        /// Application id.
+        #[cfg_attr(feature = "clap", arg(long))]
+        app_id: Option<String>,
+        /// Initial logical width.
+        #[cfg_attr(feature = "clap", arg(long, default_value_t = 1280))]
+        width: u32,
+        /// Initial logical height.
+        #[cfg_attr(feature = "clap", arg(long, default_value_t = 720))]
+        height: u32,
+        /// Provider-level media stream id, for example a WebRTC track id.
+        #[cfg_attr(feature = "clap", arg(long))]
+        stream_id: String,
+    },
+    /// Focus a viewer-side collaboration remote window.
+    FocusRemoteWindow {
+        /// Local remote-window id returned by tiri.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: u64,
+    },
+    /// Close a viewer-side collaboration remote window.
+    CloseRemoteWindow {
+        /// Local remote-window id returned by tiri.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: u64,
     },
     /// Move a pinned virtual cursor to a new window-relative coordinate.
     VirtualCursorMove {
@@ -941,6 +1239,40 @@ pub enum Action {
         /// If `None`, uses the focused workspace.
         #[cfg_attr(feature = "clap", arg(long))]
         reference: Option<WorkspaceReferenceArg>,
+    },
+    /// Add an empty named workspace near another workspace.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Add an empty named workspace near the focused workspace")
+    )]
+    AddNamedWorkspace {
+        /// Name for the new workspace. Must be unique.
+        #[cfg_attr(feature = "clap", arg())]
+        name: String,
+
+        /// Reference (index or name) of the workspace to insert near.
+        ///
+        /// If `None`, uses the focused workspace.
+        #[cfg_attr(feature = "clap", arg(long))]
+        reference: Option<WorkspaceReferenceArg>,
+
+        /// Whether to insert before or after the reference workspace.
+        #[cfg_attr(feature = "clap", arg(long, value_enum, default_value_t = WorkspaceInsertionPosition::After))]
+        position: WorkspaceInsertionPosition,
+
+        /// Whether to focus the new workspace.
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        focus: bool,
+    },
+    /// Remove an empty workspace.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Remove an empty workspace by reference")
+    )]
+    RemoveWorkspace {
+        /// Reference (index or name) of the workspace to remove.
+        #[cfg_attr(feature = "clap", arg())]
+        reference: WorkspaceReferenceArg,
     },
     /// Set the name of a workspace.
     #[cfg_attr(
@@ -1327,6 +1659,12 @@ pub enum Action {
         /// Preview height in logical pixels.
         #[cfg_attr(feature = "clap", arg(long))]
         height: f64,
+        /// Optional short description to render with the preview title.
+        #[cfg_attr(feature = "clap", arg(long))]
+        description: Option<String>,
+        /// Optional black backdrop opacity behind the preview, from 0.0 to 1.0.
+        #[cfg_attr(feature = "clap", arg(long))]
+        backdrop_opacity: Option<f32>,
         /// Output on which to show the preview. If unset, uses the active output.
         #[cfg_attr(feature = "clap", arg(long))]
         output: Option<String>,
@@ -1724,6 +2062,40 @@ pub struct Window {
     ///
     /// The timestamp comes from the monotonic clock.
     pub focus_timestamp: Option<Timestamp>,
+}
+
+/// A collaboration remote window known to this compositor.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct RemoteWindow {
+    /// Local id assigned by the viewer compositor.
+    pub id: u64,
+    /// Stable peer id for the remote machine.
+    pub peer_id: String,
+    /// Stable window id on the remote peer.
+    pub remote_window_id: u64,
+    /// Stable workspace id on the remote peer, if known.
+    pub remote_workspace_id: Option<u64>,
+    /// Display title.
+    pub title: String,
+    /// Application id.
+    pub app_id: Option<String>,
+    /// Latest logical size for the remote window stream.
+    pub size: (u32, u32),
+    /// Provider-level media stream id, for example a WebRTC track id.
+    pub stream_id: String,
+    /// Whether this remote window is focused in the viewer compositor.
+    pub is_focused: bool,
+}
+
+/// A local window stream exported for collaboration.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct SharedWindowStream {
+    /// Local window id being exported.
+    pub window_id: u64,
+    /// Provider-level media stream id, for example a WebRTC track id.
+    pub stream_id: String,
 }
 
 /// A moment in time.

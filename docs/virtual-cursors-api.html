@@ -1,0 +1,846 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tiri Pinned Virtual Cursors API</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f7f7f4;
+      --fg: #171817;
+      --muted: #5d625f;
+      --panel: #ffffff;
+      --line: #d8d9d4;
+      --code: #efefea;
+      --accent: #0f766e;
+      --accent-2: #8b5cf6;
+      --warn: #a16207;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111312;
+        --fg: #eeeeea;
+        --muted: #adb3ad;
+        --panel: #1b1e1c;
+        --line: #353a36;
+        --code: #252925;
+        --accent: #2dd4bf;
+        --accent-2: #a78bfa;
+        --warn: #facc15;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+      color: var(--fg);
+      background: var(--bg);
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    main,
+    .header-inner {
+      width: min(1120px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .header-inner {
+      padding: 42px 0 30px;
+    }
+
+    main {
+      padding: 30px 0 60px;
+    }
+
+    h1,
+    h2,
+    h3 {
+      line-height: 1.15;
+      margin: 0;
+    }
+
+    h1 {
+      max-width: 860px;
+      font-size: clamp(2rem, 4vw, 3.8rem);
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin-top: 42px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--line);
+      font-size: 1.55rem;
+    }
+
+    h3 {
+      margin-top: 26px;
+      font-size: 1.05rem;
+    }
+
+    p {
+      max-width: 860px;
+      margin: 14px 0 0;
+    }
+
+    code,
+    pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.92rem;
+    }
+
+    code {
+      padding: 0.1rem 0.28rem;
+      border-radius: 5px;
+      background: var(--code);
+    }
+
+    pre {
+      margin: 14px 0 0;
+      padding: 16px;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--code);
+    }
+
+    ul {
+      max-width: 900px;
+      margin: 12px 0 0;
+      padding-left: 1.25rem;
+    }
+
+    li + li {
+      margin-top: 7px;
+    }
+
+    table {
+      width: 100%;
+      margin: 16px 0 0;
+      border-collapse: collapse;
+      border: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    th,
+    td {
+      padding: 10px 12px;
+      vertical-align: top;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 0.82rem;
+      text-transform: uppercase;
+      letter-spacing: 0;
+      background: color-mix(in srgb, var(--panel), var(--code) 55%);
+    }
+
+    .lede {
+      max-width: 860px;
+      color: var(--muted);
+      font-size: 1.08rem;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 20px;
+    }
+
+    .pill {
+      padding: 5px 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      background: var(--bg);
+      font-size: 0.86rem;
+    }
+
+    .note {
+      max-width: 900px;
+      margin: 18px 0 0;
+      padding: 14px 16px;
+      border-left: 4px solid var(--accent);
+      background: var(--panel);
+    }
+
+    .warning {
+      border-left-color: var(--warn);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 18px;
+    }
+
+    .card {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    .card h3 {
+      margin-top: 0;
+    }
+
+    .swatches {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .swatch {
+      width: 34px;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+
+    .tok-keyword,
+    .tok-builtin {
+      color: var(--accent-2);
+      font-weight: 650;
+    }
+
+    .tok-type {
+      color: var(--accent);
+      font-weight: 620;
+    }
+
+    .tok-string {
+      color: #15803d;
+    }
+
+    .tok-number {
+      color: #b45309;
+    }
+
+    .tok-comment {
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    .tok-property {
+      color: #0369a1;
+    }
+
+    .tok-command {
+      color: var(--accent);
+      font-weight: 650;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .tok-string {
+        color: #86efac;
+      }
+
+      .tok-number {
+        color: #fbbf24;
+      }
+
+      .tok-property {
+        color: #7dd3fc;
+      }
+    }
+
+    @media (max-width: 760px) {
+      main,
+      .header-inner {
+        width: min(100% - 24px, 1120px);
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <h1>Pinned Virtual Cursors API</h1>
+      <p class="lede">
+        Proposal for compositor-rendered cursors that are owned by IPC clients, pinned to
+        window-relative coordinates, animated on movement, and usable for click, scroll, and text
+        input without stealing normal pointer focus.
+      </p>
+      <div class="meta">
+        <span class="pill">Target repo: tiri</span>
+        <span class="pill">Surface: niri-ipc</span>
+        <span class="pill">Render owner: compositor</span>
+        <span class="pill">Coordinate space: window logical px</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section>
+      <h2>Goal</h2>
+      <p>
+        The new feature should let an external controller create one or more visible cursors that
+        behave like durable annotations over a specific window. A cursor is pinned to a window id and
+        a point inside that window. When the window moves, scrolls through the layout, changes
+        output, or is rendered in a preview-like overlay, the cursor follows the same window-relative
+        point. When the client moves the cursor to a new point, tiri animates the visual cursor from
+        the old point to the new point.
+      </p>
+      <p>
+        These cursors are not additional Wayland seats. They are compositor-owned visual and action
+        handles. Input injection should reuse the existing computer-use semantics: target a window
+        by id, send click or scroll at a window-relative coordinate, and restore focus afterward.
+      </p>
+      <div class="note">
+        <strong>Design constraint:</strong> this should not mutate the real hardware pointer
+        location just to show agent or automation state. The normal cursor remains a single seat
+        cursor; pinned cursors are separate render elements with explicit action APIs.
+      </div>
+    </section>
+
+    <section>
+      <h2>API Shape</h2>
+      <p>
+        Use normal niri IPC requests for stateful cursor management. Keep one-shot interaction
+        commands under <code>Action</code> so the CLI and config conversion path remain familiar.
+      </p>
+
+      <h3>New Request Variants</h3>
+      <pre><code class="language-rust">pub enum Request {
+    VirtualCursors,
+    CreateVirtualCursor(VirtualCursorCreate),
+    UpdateVirtualCursor(VirtualCursorUpdate),
+    DestroyVirtualCursor { cursor_id: String },
+}</code></pre>
+
+      <h3>New Response Variants</h3>
+      <pre><code class="language-rust">pub enum Response {
+    VirtualCursors(Vec&lt;VirtualCursor&gt;),
+    VirtualCursorCreated(VirtualCursor),
+    VirtualCursorUpdated(VirtualCursor),
+    VirtualCursorDestroyed { cursor_id: String },
+}</code></pre>
+
+      <h3>New Action Variants</h3>
+      <pre><code class="language-rust">pub enum Action {
+    VirtualCursorMove(VirtualCursorMove),
+    VirtualCursorClick(VirtualCursorClick),
+    VirtualCursorScroll(VirtualCursorScroll),
+    VirtualCursorTypeText(VirtualCursorTypeText),
+}</code></pre>
+    </section>
+
+    <section>
+      <h2>Core Types</h2>
+
+      <h3>Cursor Identity and Target</h3>
+      <pre><code class="language-rust">pub struct VirtualCursor {
+    pub cursor_id: String,
+    pub target: VirtualCursorTarget,
+    pub position: WindowPoint,
+    pub appearance: VirtualCursorAppearance,
+    pub animation: VirtualCursorAnimation,
+    pub visible: bool,
+    pub z_index: i32,
+}
+
+pub struct VirtualCursorTarget {
+    pub window_id: u64,
+    pub behavior_when_missing: MissingWindowBehavior,
+}
+
+pub struct WindowPoint {
+    pub x: f64,
+    pub y: f64,
+}</code></pre>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Meaning</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>cursor_id</code></td>
+            <td>Stable client-chosen id. Reusing an id updates the existing cursor only when the request opts into replacement.</td>
+          </tr>
+          <tr>
+            <td><code>window_id</code></td>
+            <td>The mapped window id from <code>Request::Windows</code>. Coordinates are logical pixels inside this window.</td>
+          </tr>
+          <tr>
+            <td><code>position</code></td>
+            <td>The pinned point. This remains window-relative even when the window moves or changes output.</td>
+          </tr>
+          <tr>
+            <td><code>z_index</code></td>
+            <td>Ordering among pinned cursors. All pinned cursors render above normal windows and below modal compositor UI unless configured otherwise.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Create</h3>
+      <pre><code class="language-rust">pub struct VirtualCursorCreate {
+    pub cursor_id: String,
+    pub target: VirtualCursorTarget,
+    pub position: WindowPoint,
+    pub appearance: Option&lt;VirtualCursorAppearance&gt;,
+    pub animation: Option&lt;VirtualCursorAnimation&gt;,
+    pub visible: Option&lt;bool&gt;,
+    pub z_index: Option&lt;i32&gt;,
+    pub replace_existing: bool,
+}</code></pre>
+
+      <h3>Update</h3>
+      <pre><code class="language-rust">pub struct VirtualCursorUpdate {
+    pub cursor_id: String,
+    pub target: Option&lt;VirtualCursorTarget&gt;,
+    pub position: Option&lt;WindowPoint&gt;,
+    pub appearance: Option&lt;VirtualCursorAppearance&gt;,
+    pub animation: Option&lt;VirtualCursorAnimation&gt;,
+    pub visible: Option&lt;bool&gt;,
+    pub z_index: Option&lt;i32&gt;,
+}</code></pre>
+    </section>
+
+    <section>
+      <h2>Appearance</h2>
+      <p>
+        The appearance API should deliberately resemble the normal cursor configuration, but it also
+        needs color overrides because automation cursors must be distinguishable from the real
+        pointer and from each other.
+      </p>
+
+      <pre><code class="language-rust">pub struct VirtualCursorAppearance {
+    pub source: VirtualCursorSource,
+    pub size: Option&lt;u16&gt;,
+    pub color: Option&lt;CursorColor&gt;,
+    pub outline_color: Option&lt;CursorColor&gt;,
+    pub opacity: Option&lt;f32&gt;,
+    pub label: Option&lt;String&gt;,
+}
+
+pub enum VirtualCursorSource {
+    Theme {
+        xcursor_theme: Option&lt;String&gt;,
+        icon: Option&lt;String&gt;,
+    },
+    Builtin {
+        shape: BuiltinCursorShape,
+    },
+    Surface {
+        path: String,
+        hotspot_x: i32,
+        hotspot_y: i32,
+    },
+}
+
+pub enum BuiltinCursorShape {
+    Arrow,
+    Crosshair,
+    Ring,
+    Dot,
+    Hand,
+}
+
+pub struct CursorColor {
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+    pub a: f32,
+}</code></pre>
+
+      <div class="grid">
+        <div class="card">
+          <h3>Theme Cursor</h3>
+          <p>
+            Uses the same xcursor loading path as the normal cursor. If <code>color</code> is set,
+            colorization is a compositor tint over the rendered cursor texture.
+          </p>
+          <div class="swatches">
+            <span class="swatch" style="background:#ffffff"></span>
+            <span class="swatch" style="background:#111827"></span>
+            <span class="swatch" style="background:#2dd4bf"></span>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Builtin Cursor</h3>
+          <p>
+            Uses simple compositor-drawn geometry. This is the most predictable path for colored
+            agent cursors because fill, outline, size, and opacity are native parameters.
+          </p>
+          <div class="swatches">
+            <span class="swatch" style="background:#8b5cf6"></span>
+            <span class="swatch" style="background:#ef4444"></span>
+            <span class="swatch" style="background:#f59e0b"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="note">
+        <strong>Recommended default:</strong> <code>Builtin { shape: Ring }</code>,
+        <code>color = rgba(45, 212, 191, 0.95)</code>, and a dark outline. It is readable on top of
+        application content and clearly different from the hardware cursor.
+      </div>
+    </section>
+
+    <section>
+      <h2>Movement Animation</h2>
+      <p>
+        Movement is a state transition on the cursor. The cursor remains pinned to the same window,
+        but its window-relative point interpolates from the current point to the requested point.
+        During animation, rendering samples the animated point each frame; actions target the latest
+        logical destination unless a command explicitly asks to wait.
+      </p>
+
+      <pre><code class="language-rust">pub struct VirtualCursorAnimation {
+    pub duration_ms: u32,
+    pub curve: VirtualCursorCurve,
+    pub interrupt: AnimationInterruptMode,
+}
+
+pub enum VirtualCursorCurve {
+    Linear,
+    EaseOutCubic,
+    EaseInOutCubic,
+    Spring {
+        damping_ratio: f64,
+        stiffness: f64,
+        epsilon: f64,
+    },
+}
+
+pub enum AnimationInterruptMode {
+    RetargetFromCurrentVisualPosition,
+    RetargetFromLastDestination,
+    JumpToNewDestination,
+}</code></pre>
+
+      <h3>Move Action</h3>
+      <pre><code class="language-rust">pub struct VirtualCursorMove {
+    pub cursor_id: String,
+    pub position: WindowPoint,
+    pub animation: Option&lt;VirtualCursorAnimation&gt;,
+    pub wait: bool,
+}</code></pre>
+
+      <p>
+        <code>wait = true</code> means the IPC reply is delayed until the animation reaches the
+        destination or the cursor is destroyed. For regular CLI use, <code>wait = false</code> keeps
+        the request cheap and lets the compositor continue rendering animation frames.
+      </p>
+    </section>
+
+    <section>
+      <h2>Interaction Actions</h2>
+      <p>
+        Interaction actions use the cursor's current target window and either the destination point
+        or the current visual point. The default should be destination point, because a controller
+        that calls move then click normally expects the click to land at the requested coordinate,
+        even if the visual animation is still finishing.
+      </p>
+
+      <pre><code class="language-rust">pub struct VirtualCursorClick {
+    pub cursor_id: String,
+    pub button: PointerButton,
+    pub count: u8,
+    pub at: CursorActionPoint,
+}
+
+pub struct VirtualCursorScroll {
+    pub cursor_id: String,
+    pub scroll_x: i32,
+    pub scroll_y: i32,
+    pub at: CursorActionPoint,
+}
+
+pub struct VirtualCursorTypeText {
+    pub cursor_id: String,
+    pub text: String,
+}
+
+pub enum CursorActionPoint {
+    Destination,
+    CurrentVisual,
+    Override(WindowPoint),
+}
+
+pub enum PointerButton {
+    Left,
+    Middle,
+    Right,
+    Back,
+    Forward,
+    Code(u32),
+}</code></pre>
+
+      <p>
+        Under the hood, click and scroll can reuse the existing computer-use helpers: resolve
+        <code>cursor_id</code> to <code>window_id</code> and a <code>WindowPoint</code>, then route
+        through the same path as <code>CuaClick</code> and <code>CuaScroll</code>. That gives us
+        window-relative targeting and avoids changing compositor layout focus.
+      </p>
+    </section>
+
+    <section>
+      <h2>JSON Examples</h2>
+
+      <h3>Create a Purple Agent Cursor</h3>
+      <pre><code class="language-json">{
+  "CreateVirtualCursor": {
+    "cursor_id": "agent-primary",
+    "target": {
+      "window_id": 42,
+      "behavior_when_missing": "Hide"
+    },
+    "position": { "x": 320.0, "y": 180.0 },
+    "appearance": {
+      "source": { "Builtin": { "shape": "Ring" } },
+      "size": 28,
+      "color": { "r": 0.55, "g": 0.36, "b": 0.96, "a": 0.95 },
+      "outline_color": { "r": 0.05, "g": 0.05, "b": 0.08, "a": 0.85 },
+      "opacity": 1.0,
+      "label": "agent"
+    },
+    "animation": {
+      "duration_ms": 160,
+      "curve": "EaseOutCubic",
+      "interrupt": "RetargetFromCurrentVisualPosition"
+    },
+    "visible": true,
+    "z_index": 10,
+    "replace_existing": true
+  }
+}</code></pre>
+
+      <h3>Move, Then Click</h3>
+      <pre><code class="language-json">{
+  "Action": {
+    "VirtualCursorMove": {
+      "cursor_id": "agent-primary",
+      "position": { "x": 580.0, "y": 240.0 },
+      "animation": { "duration_ms": 220, "curve": "EaseInOutCubic", "interrupt": "RetargetFromCurrentVisualPosition" },
+      "wait": false
+    }
+  }
+}</code></pre>
+
+      <pre><code class="language-json">{
+  "Action": {
+    "VirtualCursorClick": {
+      "cursor_id": "agent-primary",
+      "button": "Left",
+      "count": 1,
+      "at": "Destination"
+    }
+  }
+}</code></pre>
+    </section>
+
+    <section>
+      <h2>CLI Sketch</h2>
+      <p>
+        The CLI should keep the common path terse and leave advanced styling to JSON. The names below
+        map directly to the IPC action/request names.
+      </p>
+
+      <pre><code class="language-sh">niri msg create-virtual-cursor \
+  --cursor-id agent-primary \
+  --window-id 42 \
+  --x 320 --y 180 \
+  --shape ring \
+  --color '#8b5cf6' \
+  --outline-color '#111827' \
+  --size 28
+
+niri msg action virtual-cursor-move \
+  --cursor-id agent-primary \
+  --x 580 --y 240 \
+  --duration-ms 220
+
+niri msg action virtual-cursor-click \
+  --cursor-id agent-primary \
+  --button left
+
+niri msg destroy-virtual-cursor --cursor-id agent-primary</code></pre>
+    </section>
+
+    <section>
+      <h2>Behavior Rules</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Case</th>
+            <th>Proposed behavior</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Window moves</td>
+            <td>Cursor stays pinned to the same window-relative point and renders at the new global position.</td>
+          </tr>
+          <tr>
+            <td>Window resizes</td>
+            <td>Point remains unchanged. If it falls outside the new logical bounds, render at the nearest visible edge but preserve the stored coordinate unless the client updates it.</td>
+          </tr>
+          <tr>
+            <td>Window closes</td>
+            <td>Apply <code>MissingWindowBehavior</code>: hide, destroy, or keep stale state for reconnect/debugging.</td>
+          </tr>
+          <tr>
+            <td>Window is off-screen or on another workspace</td>
+            <td>Cursor remains alive but does not render unless that window is currently rendered by the layout or a compositor UI that opts into pinned cursor overlays.</td>
+          </tr>
+          <tr>
+            <td>Normal hardware cursor moves</td>
+            <td>No effect on pinned cursors.</td>
+          </tr>
+          <tr>
+            <td>Pinned cursor clicks</td>
+            <td>Click targets the pinned window and coordinate using computer-use dispatch, without focusing the window unless requested by a future flag.</td>
+          </tr>
+          <tr>
+            <td>Screencopy</td>
+            <td>Expose a separate policy flag later. Initial behavior should include pinned cursors in normal screen capture because they are visible compositor overlays.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <pre><code class="language-rust">pub enum MissingWindowBehavior {
+    Hide,
+    Destroy,
+    KeepStale,
+}</code></pre>
+    </section>
+
+    <section>
+      <h2>Implementation Mapping</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>State</h3>
+          <p>
+            Add a <code>VirtualCursorUi</code> or <code>PinnedCursorManager</code> owned by
+            <code>Niri</code>. Store cursors by id, with target window id, desired point, animated
+            visual point, appearance, and render cache.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Rendering</h3>
+          <p>
+            Render pinned cursors in the compositor pass after windows and before high-priority UI.
+            Resolve each cursor by asking whether its target mapped window is currently rendered and
+            converting the window-relative point to output-relative physical coordinates.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Animation</h3>
+          <p>
+            Reuse the existing animation clock pattern. Any active cursor animation should make
+            <code>are_animations_ongoing</code> return true and trigger redraws until complete.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Input</h3>
+          <p>
+            Route click, scroll, and text through the existing CUA helpers after resolving the cursor
+            to <code>window_id</code> plus <code>WindowPoint</code>. This keeps interaction behavior
+            independent from the real seat pointer.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Open Questions</h2>
+      <ul>
+        <li>Should pinned cursors appear inside window preview UI, MRU thumbnails, and screenshot window captures, or only on the normal desktop render path?</li>
+        <li>Should a cursor be allowed to pin to a layer-shell surface, or should step one only support mapped windows?</li>
+        <li>Should click actions ever focus the target window, or should focus-changing be a separate explicit action?</li>
+        <li>Should cursor colors support theme-aware names in addition to explicit RGBA values?</li>
+        <li>Should clients be able to subscribe to cursor lifecycle events, or is request-response listing enough for now?</li>
+      </ul>
+
+      <div class="note warning">
+        <strong>Step one recommendation:</strong> implement mapped-window cursors only, include
+        built-in colored shapes first, then add xcursor-theme source support after the render and
+        animation model is stable.
+      </div>
+    </section>
+  </main>
+  <script>
+    const escapeHtml = (value) => value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+
+    const wrap = (className, value) => `<span class="${className}">${value}</span>`;
+
+    const highlightRust = (source) => {
+      let html = escapeHtml(source);
+      html = html.replace(/(\/\/.*)$/gm, (match) => wrap("tok-comment", match));
+      html = html.replace(/"([^"\\]|\\.)*"/g, (match) => wrap("tok-string", match));
+      html = html.replace(/\b\d+(\.\d+)?\b/g, (match) => wrap("tok-number", match));
+      html = html.replace(
+        /\b(pub|struct|enum|Option|Vec|String|bool|u8|u16|u32|u64|i32|f32|f64)\b/g,
+        (match) => wrap(/^[A-Z]/.test(match) || ["String", "Option", "Vec"].includes(match) ? "tok-type" : "tok-keyword", match)
+      );
+      html = html.replace(
+        /\b(Clone|Copy|Debug|Deserialize|Serialize|JsonSchema|Args|Parser)\b/g,
+        (match) => wrap("tok-builtin", match)
+      );
+      return html;
+    };
+
+    const highlightJson = (source) => {
+      let html = escapeHtml(source);
+      html = html.replace(/"([^"\\]|\\.)*"(?=\s*:)/g, (match) => wrap("tok-property", match));
+      html = html.replace(/:\s*"([^"\\]|\\.)*"/g, (match) => {
+        const idx = match.indexOf('"');
+        return `${match.slice(0, idx)}${wrap("tok-string", match.slice(idx))}`;
+      });
+      html = html.replace(/\b(true|false|null)\b/g, (match) => wrap("tok-keyword", match));
+      html = html.replace(/\b-?\d+(\.\d+)?\b/g, (match) => wrap("tok-number", match));
+      return html;
+    };
+
+    const highlightShell = (source) => {
+      let html = escapeHtml(source);
+      html = html.replace(/(^|\n)([a-zA-Z0-9_.-]+)/g, (match, prefix, command) => {
+        return `${prefix}${wrap("tok-command", command)}`;
+      });
+      html = html.replace(/(--[a-zA-Z0-9-]+)/g, (match) => wrap("tok-keyword", match));
+      html = html.replace(/'[^']*'|"[^"]*"/g, (match) => wrap("tok-string", match));
+      html = html.replace(/\b\d+(\.\d+)?\b/g, (match) => wrap("tok-number", match));
+      return html;
+    };
+
+    document.querySelectorAll("pre code").forEach((block) => {
+      const source = block.textContent;
+      if (block.classList.contains("language-rust")) {
+        block.innerHTML = highlightRust(source);
+      } else if (block.classList.contains("language-json")) {
+        block.innerHTML = highlightJson(source);
+      } else if (block.classList.contains("language-sh")) {
+        block.innerHTML = highlightShell(source);
+      }
+    });
+  </script>
+</body>
+</html>

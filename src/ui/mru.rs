@@ -104,6 +104,7 @@ pub struct WindowMruUi {
 
 pub struct WindowPreviewUi {
     preview: Option<WindowPreview>,
+    descriptions: HashMap<MappedId, String>,
     config: Rc<RefCell<Config>>,
 }
 
@@ -180,6 +181,8 @@ struct WindowPreview {
     output: Output,
     geo: Rectangle<f64, Logical>,
     thumbnail: Thumbnail,
+    description: Option<String>,
+    backdrop_opacity: Option<f32>,
 }
 
 #[derive(Debug)]
@@ -337,12 +340,21 @@ impl Thumbnail {
         &self,
         renderer: &mut GlesRenderer,
         mapped: &Mapped,
+        description: Option<&str>,
         scale: f64,
     ) -> Option<MruTexture> {
         with_toplevel_role(mapped.toplevel(), |role| {
-            role.title
-                .as_ref()
-                .and_then(|title| self.title_texture.borrow_mut().get(renderer, title, scale))
+            role.title.as_ref().and_then(|title| {
+                let text;
+                let title = if let Some(description) = description.filter(|d| !d.trim().is_empty())
+                {
+                    text = format!("{title} · {description}");
+                    text.as_str()
+                } else {
+                    title.as_str()
+                };
+                self.title_texture.borrow_mut().get(renderer, title, scale)
+            })
         })
     }
 
@@ -356,6 +368,8 @@ impl Thumbnail {
         scale: f64,
         is_active: bool,
         bob_y: f64,
+        description: Option<&str>,
+        backdrop_opacity: Option<f32>,
         push: &mut dyn FnMut(WindowMruUiRenderElement<R>),
     ) {
         let _span = tracy_client::span!("Thumbnail::render");
@@ -466,7 +480,7 @@ impl Thumbnail {
         });
 
         let mut title_size = None;
-        let title_texture = self.title_texture(ctx.as_gles().renderer, mapped, scale);
+        let title_texture = self.title_texture(ctx.as_gles().renderer, mapped, description, scale);
         let title_texture = title_texture.map(|texture| {
             let mut size = texture.logical_size();
             size.w = f64::min(size.w, preview_geo.size.w);
@@ -531,6 +545,9 @@ impl Thumbnail {
             if !is_active {
                 color *= 0.4;
             }
+            let background_color = backdrop_opacity
+                .map(|alpha| Color::new_unpremul(0., 0., 0., alpha.clamp(0., 1.)))
+                .unwrap_or(color);
 
             let radius = CornerRadius::from(config.highlight.corner_radius as f32);
 
@@ -538,7 +555,7 @@ impl Thumbnail {
 
             let mut background = self.background.borrow_mut();
             let mut config = *background.config();
-            config.active_color = color;
+            config.active_color = background_color;
             background.update_config(config);
             background.update_render_elements(
                 size,
@@ -1251,6 +1268,7 @@ impl WindowPreviewUi {
     pub fn new(config: Rc<RefCell<Config>>) -> Self {
         Self {
             preview: None,
+            descriptions: HashMap::new(),
             config,
         }
     }
@@ -1261,16 +1279,27 @@ impl WindowPreviewUi {
         mapped: &Mapped,
         output: Output,
         geo: Rectangle<f64, Logical>,
+        description: Option<String>,
+        backdrop_opacity: Option<f32>,
     ) {
         let mut thumbnail =
             Thumbnail::from_mapped(mapped, clock, self.config.borrow().recent_windows.previews);
         thumbnail.on_current_output = true;
         thumbnail.on_current_workspace = true;
+        let description = description.and_then(|description| {
+            let description = description.trim().to_string();
+            (!description.is_empty()).then_some(description)
+        });
+        if let Some(description) = &description {
+            self.descriptions.insert(mapped.id(), description.clone());
+        }
 
         self.preview = Some(WindowPreview {
             output,
             geo,
             thumbnail,
+            description,
+            backdrop_opacity: backdrop_opacity.map(|opacity| opacity.clamp(0., 1.)),
         });
     }
 
@@ -1283,6 +1312,7 @@ impl WindowPreviewUi {
     }
 
     pub fn remove_window(&mut self, id: MappedId) -> Option<Output> {
+        self.descriptions.remove(&id);
         if self
             .preview
             .as_ref()
@@ -1291,6 +1321,10 @@ impl WindowPreviewUi {
             return self.hide();
         }
         None
+    }
+
+    pub fn description_for(&self, id: MappedId) -> Option<&str> {
+        self.descriptions.get(&id).map(String::as_str)
     }
 
     pub fn update_window(&mut self, layout: &Layout<Mapped>, id: MappedId) {
@@ -1337,7 +1371,8 @@ impl WindowPreviewUi {
 
         let output_size = output_size(output);
         let scale = output.current_scale().fractional_scale();
-        let geo = fit_preview_geo(preview.geo, preview.thumbnail.size.to_f64(), output_size);
+        let bounds = clamp_preview_geo(preview.geo, output_size);
+        let geo = fit_preview_geo(bounds, preview.thumbnail.size.to_f64(), output_size);
         let bob_y = if mapped.rules().baba_is_float == Some(true) {
             round_logical_in_physical(scale, baba_is_float_offset(niri.clock.now(), output_size.h))
         } else {
@@ -1353,6 +1388,8 @@ impl WindowPreviewUi {
             scale,
             true,
             bob_y,
+            preview.description.as_deref(),
+            preview.backdrop_opacity,
             push,
         );
     }
@@ -1749,7 +1786,18 @@ impl Inner {
             let config = &config.recent_windows;
 
             let is_active = Some(id) == current_id;
-            thumbnail.render(ctx.r(), config, mapped, geo, scale, is_active, bob_y, push);
+            thumbnail.render(
+                ctx.r(),
+                config,
+                mapped,
+                geo,
+                scale,
+                is_active,
+                bob_y,
+                niri.window_preview_ui.description_for(id),
+                None,
+                push,
+            );
         }
     }
 

@@ -35,6 +35,7 @@ use crate::input::pick_window_grab::PickWindowGrab;
 use crate::layout::workspace::WorkspaceId;
 use crate::niri::State;
 use crate::utils::{version, with_toplevel_role};
+use crate::window::mapped::MappedId;
 use crate::window::Mapped;
 
 // If an event stream client fails to read events fast enough that we accumulate more than this
@@ -455,6 +456,42 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             let casts = state.casts.casts.values().cloned().collect();
             Response::Casts(casts)
         }
+        Request::RemoteWindows => {
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let mut windows = state
+                    .niri
+                    .remote_windows
+                    .values()
+                    .cloned()
+                    .collect::<Vec<_>>();
+                windows.sort_by_key(|window| window.id);
+                let _ = tx.send_blocking(windows);
+            });
+            let windows = rx
+                .recv()
+                .await
+                .map_err(|_| String::from("error getting remote windows"))?;
+            Response::RemoteWindows(windows)
+        }
+        Request::SharedWindowStreams => {
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let mut streams = state
+                    .niri
+                    .shared_window_streams
+                    .values()
+                    .cloned()
+                    .collect::<Vec<_>>();
+                streams.sort_by_key(|stream| stream.window_id);
+                let _ = tx.send_blocking(streams);
+            });
+            let streams = rx
+                .recv()
+                .await
+                .map_err(|_| String::from("error getting shared window streams"))?;
+            Response::SharedWindowStreams(streams)
+        }
         Request::VirtualCursors => {
             let (tx, rx) = async_channel::bounded(1);
             ctx.event_loop.insert_idle(move |state| {
@@ -466,10 +503,40 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
                 .map_err(|_| String::from("error getting virtual cursors"))?;
             Response::VirtualCursors(cursors)
         }
+        Request::CursorOverlays => {
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let _ = tx.send_blocking(state.niri.cursor_overlay_ui.list());
+            });
+            let overlays = rx
+                .recv()
+                .await
+                .map_err(|_| String::from("error getting cursor overlays"))?;
+            Response::CursorOverlays(overlays)
+        }
         Request::CreateVirtualCursor { cursor } => {
             let (tx, rx) = async_channel::bounded(1);
             ctx.event_loop.insert_idle(move |state| {
                 let clock = state.niri.clock.clone();
+                let mut cursor = cursor;
+                if cursor.at_pointer {
+                    match state
+                        .niri
+                        .hardware_pointer_position_in_window(MappedId::from_raw(cursor.window_id))
+                    {
+                        Some(pos) => {
+                            cursor.x = pos.x;
+                            cursor.y = pos.y;
+                        }
+                        None => {
+                            let _ = tx.send_blocking(Err(format!(
+                                "hardware pointer is not over window {}",
+                                cursor.window_id
+                            )));
+                            return;
+                        }
+                    }
+                }
                 let rv = state
                     .niri
                     .virtual_cursor_ui
@@ -485,6 +552,30 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
                 .await
                 .map_err(|_| String::from("error creating virtual cursor"))??;
             Response::VirtualCursorCreated(cursor)
+        }
+        Request::SetHardwareCursor { cursor } => {
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                state.niri.cursor_manager.set_hardware_override(cursor);
+                state.niri.queue_redraw_all();
+                let _ = tx.send_blocking(());
+            });
+            rx.recv()
+                .await
+                .map_err(|_| String::from("error setting hardware cursor"))?;
+            Response::Handled
+        }
+        Request::ClearHardwareCursor => {
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                state.niri.cursor_manager.clear_hardware_override();
+                state.niri.queue_redraw_all();
+                let _ = tx.send_blocking(());
+            });
+            rx.recv()
+                .await
+                .map_err(|_| String::from("error clearing hardware cursor"))?;
+            Response::Handled
         }
         Request::UpdateVirtualCursor { cursor } => {
             let (tx, rx) = async_channel::bounded(1);
@@ -525,6 +616,68 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
                 .map_err(|_| String::from("error destroying virtual cursor"))??;
             Response::VirtualCursorDestroyed {
                 cursor_id: response_cursor_id,
+            }
+        }
+        Request::RegisterCursorOverlay { overlay } => {
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let rv = state
+                    .niri
+                    .cursor_overlay_ui
+                    .register(overlay)
+                    .map_err(|err| err.to_string());
+                if rv.is_ok() {
+                    state.update_keyboard_focus();
+                    state.niri.queue_redraw_all();
+                }
+                let _ = tx.send_blocking(rv);
+            });
+            let overlay = rx
+                .recv()
+                .await
+                .map_err(|_| String::from("error registering cursor overlay"))??;
+            Response::CursorOverlayRegistered(overlay)
+        }
+        Request::UpdateCursorOverlay { overlay } => {
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let rv = state
+                    .niri
+                    .cursor_overlay_ui
+                    .update(overlay)
+                    .map_err(|err| err.to_string());
+                if rv.is_ok() {
+                    state.update_keyboard_focus();
+                    state.niri.queue_redraw_all();
+                }
+                let _ = tx.send_blocking(rv);
+            });
+            let overlay = rx
+                .recv()
+                .await
+                .map_err(|_| String::from("error updating cursor overlay"))??;
+            Response::CursorOverlayUpdated(overlay)
+        }
+        Request::UnregisterCursorOverlay { overlay_id } => {
+            let response_overlay_id = overlay_id.clone();
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let rv = state
+                    .niri
+                    .cursor_overlay_ui
+                    .unregister(&overlay_id)
+                    .map_err(|err| err.to_string());
+                if rv.is_ok() {
+                    state.update_keyboard_focus();
+                    state.niri.queue_redraw_all();
+                }
+                let _ = tx.send_blocking(rv);
+            });
+            rx.recv()
+                .await
+                .map_err(|_| String::from("error unregistering cursor overlay"))??;
+            Response::CursorOverlayUnregistered {
+                overlay_id: response_overlay_id,
             }
         }
     };

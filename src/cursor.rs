@@ -15,6 +15,8 @@ use smithay::wayland::compositor::with_states;
 use xcursor::parser::{parse_xcursor, Image};
 use xcursor::CursorTheme;
 
+use niri_ipc::HardwareCursorOverride;
+
 /// Some default looking `left_ptr` icon.
 static FALLBACK_CURSOR_DATA: &[u8] = include_bytes!("../resources/cursor.rgba");
 
@@ -26,6 +28,7 @@ pub struct CursorManager {
     theme: CursorTheme,
     size: u8,
     current_cursor: CursorImageStatus,
+    hardware_override: Option<HardwareCursorOverride>,
     named_cursor_cache: RefCell<XCursorCache>,
     named_cursor_by_name_cache: RefCell<XCursorNameCache>,
     named_cursor_by_theme_cache: RefCell<XCursorThemeCache>,
@@ -41,6 +44,7 @@ impl CursorManager {
             theme,
             size,
             current_cursor: CursorImageStatus::default_named(),
+            hardware_override: None,
             named_cursor_cache: Default::default(),
             named_cursor_by_name_cache: Default::default(),
             named_cursor_by_theme_cache: Default::default(),
@@ -68,6 +72,36 @@ impl CursorManager {
 
     /// Get the current rendering cursor.
     pub fn get_render_cursor(&self, scale: i32) -> RenderCursor {
+        if let Some(override_cursor) = &self.hardware_override {
+            let name = override_cursor.icon.as_deref().unwrap_or("default");
+            let cursor = override_cursor
+                .theme
+                .as_deref()
+                .and_then(|theme| {
+                    self.get_cursor_with_theme_icon(theme, name, scale, override_cursor.size)
+                        .or_else(|| {
+                            self.get_cursor_with_theme_icon(
+                                theme,
+                                "left_ptr",
+                                scale,
+                                override_cursor.size,
+                            )
+                        })
+                })
+                .or_else(|| self.get_cursor_with_icon_name(name, scale, override_cursor.size))
+                .unwrap_or_else(|| self.get_default_cursor(scale));
+            return RenderCursor::Themed {
+                cache_name: format!(
+                    "{}:{}:{}",
+                    override_cursor.theme.as_deref().unwrap_or("default"),
+                    name,
+                    override_cursor.size.unwrap_or(u16::from(self.size))
+                ),
+                scale,
+                cursor,
+            };
+        }
+
         match self.current_cursor.clone() {
             CursorImageStatus::Hidden => RenderCursor::Hidden,
             CursorImageStatus::Surface(surface) => {
@@ -216,6 +250,14 @@ impl CursorManager {
         self.current_cursor = cursor;
     }
 
+    pub fn set_hardware_override(&mut self, cursor: HardwareCursorOverride) {
+        self.hardware_override = Some(cursor);
+    }
+
+    pub fn clear_hardware_override(&mut self) {
+        self.hardware_override = None;
+    }
+
     /// Load the cursor with the given `name` from the file system picking the closest
     /// one to the given `size`.
     fn load_xcursor(theme: &CursorTheme, name: &str, size: i32) -> anyhow::Result<XCursor> {
@@ -282,6 +324,11 @@ pub enum RenderCursor {
     },
     Named {
         icon: CursorIcon,
+        scale: i32,
+        cursor: Rc<XCursor>,
+    },
+    Themed {
+        cache_name: String,
         scale: i32,
         cursor: Rc<XCursor>,
     },

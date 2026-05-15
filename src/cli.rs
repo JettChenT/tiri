@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
-use niri_ipc::{Action, OutputAction};
+use niri_ipc::{Action, CursorOverlayAlign, CursorOverlaySide, OutputAction};
 
 use crate::utils::version;
 
@@ -112,8 +112,14 @@ pub enum Msg {
     OverviewState,
     /// List screencasts.
     Casts,
+    /// List collaboration remote windows.
+    RemoteWindows,
+    /// List locally shared collaboration window streams.
+    SharedWindowStreams,
     /// List pinned virtual cursors.
     VirtualCursors,
+    /// List cursor-anchored overlays.
+    CursorOverlays,
     /// Create a pinned virtual cursor.
     CreateVirtualCursor {
         /// Cursor id.
@@ -152,7 +158,24 @@ pub enum Msg {
         /// Replace an existing cursor with the same id.
         #[arg(long)]
         replace_existing: bool,
+        /// Place the cursor at the current hardware pointer location inside the window.
+        #[arg(long)]
+        at_pointer: bool,
     },
+    /// Temporarily override the rendered hardware pointer cursor.
+    SetHardwareCursor {
+        /// Xcursor theme name. Defaults to the compositor's configured cursor theme.
+        #[arg(long)]
+        cursor_theme: Option<String>,
+        /// Xcursor theme icon name. Defaults to the normal pointer icon.
+        #[arg(long)]
+        cursor_icon: Option<String>,
+        /// Cursor size in logical pixels.
+        #[arg(long)]
+        size: Option<u16>,
+    },
+    /// Clear a temporary rendered hardware pointer cursor override.
+    ClearHardwareCursor,
     /// Update a pinned virtual cursor.
     UpdateVirtualCursor {
         /// Cursor id.
@@ -200,6 +223,108 @@ pub enum Msg {
         /// Cursor id.
         #[arg(long)]
         cursor_id: String,
+    },
+    /// Register a cursor-anchored layer-shell overlay.
+    RegisterCursorOverlay {
+        /// Overlay id.
+        #[arg(long)]
+        overlay_id: String,
+        /// Layer-shell namespace to render as overlay content.
+        #[arg(long)]
+        layer_namespace: String,
+        /// Anchor to the hardware pointer.
+        #[arg(long, conflicts_with = "anchor_virtual_cursor")]
+        anchor_hardware_pointer: bool,
+        /// Anchor to this virtual cursor id.
+        #[arg(long)]
+        anchor_virtual_cursor: Option<String>,
+        /// Preferred side relative to the cursor.
+        #[arg(long, default_value = "right")]
+        side: CursorOverlaySide,
+        /// Cross-axis alignment relative to the cursor.
+        #[arg(long, default_value = "start")]
+        align: CursorOverlayAlign,
+        /// Gap between cursor and overlay.
+        #[arg(long, default_value_t = 10.)]
+        gap: f64,
+        /// Extra X offset after side placement.
+        #[arg(long, default_value_t = 0.)]
+        offset_x: f64,
+        /// Extra Y offset after side placement.
+        #[arg(long, default_value_t = 0.)]
+        offset_y: f64,
+        /// Padding from output edges.
+        #[arg(long, default_value_t = 8.)]
+        edge_padding: f64,
+        /// Disable side flipping when the overlay would hit an output edge.
+        #[arg(long)]
+        no_flip: bool,
+        /// Hit-test the overlay at its cursor-anchored visual position.
+        #[arg(long)]
+        interactive: bool,
+        /// Request keyboard focus while the overlay is visible.
+        #[arg(long)]
+        keyboard_focus: bool,
+        /// Replace an existing overlay with the same id.
+        #[arg(long)]
+        replace_existing: bool,
+    },
+    /// Update a cursor-anchored layer-shell overlay.
+    UpdateCursorOverlay {
+        /// Overlay id.
+        #[arg(long)]
+        overlay_id: String,
+        /// New layer-shell namespace to render as overlay content.
+        #[arg(long)]
+        layer_namespace: Option<String>,
+        /// Anchor to the hardware pointer.
+        #[arg(long, conflicts_with = "anchor_virtual_cursor")]
+        anchor_hardware_pointer: bool,
+        /// Anchor to this virtual cursor id.
+        #[arg(long)]
+        anchor_virtual_cursor: Option<String>,
+        /// Preferred side relative to the cursor.
+        #[arg(long)]
+        side: Option<CursorOverlaySide>,
+        /// Cross-axis alignment relative to the cursor.
+        #[arg(long)]
+        align: Option<CursorOverlayAlign>,
+        /// Gap between cursor and overlay.
+        #[arg(long)]
+        gap: Option<f64>,
+        /// Extra X offset after side placement.
+        #[arg(long)]
+        offset_x: Option<f64>,
+        /// Extra Y offset after side placement.
+        #[arg(long)]
+        offset_y: Option<f64>,
+        /// Padding from output edges.
+        #[arg(long)]
+        edge_padding: Option<f64>,
+        /// Enable side flipping when the overlay would hit an output edge.
+        #[arg(long, conflicts_with = "no_flip")]
+        flip: bool,
+        /// Disable side flipping when the overlay would hit an output edge.
+        #[arg(long)]
+        no_flip: bool,
+        /// Show or hide the overlay.
+        #[arg(long)]
+        visible: Option<bool>,
+        /// Enable or disable hit-testing at the cursor-anchored visual position.
+        #[arg(long)]
+        interactive: Option<bool>,
+        /// Enable or disable keyboard focus while the overlay is visible.
+        #[arg(long)]
+        keyboard_focus: Option<bool>,
+        /// Overlay z-index.
+        #[arg(long)]
+        z_index: Option<i32>,
+    },
+    /// Unregister a cursor-anchored overlay.
+    UnregisterCursorOverlay {
+        /// Overlay id.
+        #[arg(long)]
+        overlay_id: String,
     },
 }
 

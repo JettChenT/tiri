@@ -187,6 +187,16 @@ impl VirtualCursorUi {
         Ok((cursor.window_id.get(), position))
     }
 
+    pub fn visual_point_on_output(
+        &self,
+        niri: &Niri,
+        output: &Output,
+        cursor_id: &str,
+    ) -> Option<Point<f64, Logical>> {
+        let cursor = self.cursors.get(cursor_id)?;
+        niri.window_relative_point_on_output(output, cursor.window_id, cursor.visual_position())
+    }
+
     pub fn remove_window(&mut self, id: MappedId) {
         self.cursors.retain(|_, cursor| cursor.window_id != id);
     }

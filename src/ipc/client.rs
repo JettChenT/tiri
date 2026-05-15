@@ -7,8 +7,9 @@ use anyhow::{anyhow, bail, Context};
 use niri_config::OutputName;
 use niri_ipc::socket::Socket;
 use niri_ipc::{
-    Action, Cast, CastKind, CastTarget, Event, KeyboardLayouts, LogicalOutput, Mode, Output,
-    OutputConfigChanged, Overview, Request, Response, RgbaColor, Transform, VirtualCursorAnimation,
+    Action, Cast, CastKind, CastTarget, CursorOverlayAnchor, CursorOverlayPlacement, Event,
+    HardwareCursorOverride, KeyboardLayouts, LogicalOutput, Mode, Output, OutputConfigChanged,
+    Overview, Request, Response, RgbaColor, Transform, VirtualCursorAnimation,
     VirtualCursorAppearance, VirtualCursorCreate, VirtualCursorCurve, VirtualCursorSource,
     VirtualCursorUpdate, Window, WindowLayout,
 };
@@ -53,7 +54,10 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
         Msg::RequestError => Request::ReturnError,
         Msg::OverviewState => Request::OverviewState,
         Msg::Casts => Request::Casts,
+        Msg::RemoteWindows => Request::RemoteWindows,
+        Msg::SharedWindowStreams => Request::SharedWindowStreams,
         Msg::VirtualCursors => Request::VirtualCursors,
+        Msg::CursorOverlays => Request::CursorOverlays,
         Msg::CreateVirtualCursor {
             cursor_id,
             window_id,
@@ -67,6 +71,7 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
             outline_color,
             duration_ms,
             replace_existing,
+            at_pointer,
         } => Request::CreateVirtualCursor {
             cursor: VirtualCursorCreate {
                 cursor_id: cursor_id.clone(),
@@ -104,8 +109,21 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                 visible: Some(true),
                 z_index: Some(0),
                 replace_existing: *replace_existing,
+                at_pointer: *at_pointer,
             },
         },
+        Msg::SetHardwareCursor {
+            cursor_theme,
+            cursor_icon,
+            size,
+        } => Request::SetHardwareCursor {
+            cursor: HardwareCursorOverride {
+                theme: cursor_theme.clone().and_then(non_empty_string),
+                icon: cursor_icon.clone().and_then(non_empty_string),
+                size: *size,
+            },
+        },
+        Msg::ClearHardwareCursor => Request::ClearHardwareCursor,
         Msg::UpdateVirtualCursor {
             cursor_id,
             window_id,
@@ -170,6 +188,83 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
         },
         Msg::DestroyVirtualCursor { cursor_id } => Request::DestroyVirtualCursor {
             cursor_id: cursor_id.clone(),
+        },
+        Msg::RegisterCursorOverlay {
+            overlay_id,
+            layer_namespace,
+            anchor_hardware_pointer,
+            anchor_virtual_cursor,
+            side,
+            align,
+            gap,
+            offset_x,
+            offset_y,
+            edge_padding,
+            no_flip,
+            interactive,
+            keyboard_focus,
+            replace_existing,
+        } => Request::RegisterCursorOverlay {
+            overlay: niri_ipc::CursorOverlayRegister {
+                overlay_id: overlay_id.clone(),
+                layer_namespace: layer_namespace.clone(),
+                anchor: cursor_overlay_anchor(*anchor_hardware_pointer, anchor_virtual_cursor)?,
+                placement: CursorOverlayPlacement {
+                    side: *side,
+                    align: *align,
+                    gap: *gap,
+                    offset_x: *offset_x,
+                    offset_y: *offset_y,
+                    edge_padding: *edge_padding,
+                    flip: !*no_flip,
+                },
+                visible: Some(true),
+                interactive: Some(*interactive),
+                keyboard_focus: Some(*keyboard_focus),
+                z_index: Some(0),
+                replace_existing: *replace_existing,
+            },
+        },
+        Msg::UpdateCursorOverlay {
+            overlay_id,
+            layer_namespace,
+            anchor_hardware_pointer,
+            anchor_virtual_cursor,
+            side,
+            align,
+            gap,
+            offset_x,
+            offset_y,
+            edge_padding,
+            flip,
+            no_flip,
+            visible,
+            interactive,
+            keyboard_focus,
+            z_index,
+        } => Request::UpdateCursorOverlay {
+            overlay: niri_ipc::CursorOverlayUpdate {
+                overlay_id: overlay_id.clone(),
+                layer_namespace: layer_namespace.clone(),
+                anchor: cursor_overlay_anchor_opt(*anchor_hardware_pointer, anchor_virtual_cursor)?,
+                placement: cursor_overlay_placement_opt(
+                    *side,
+                    *align,
+                    *gap,
+                    *offset_x,
+                    *offset_y,
+                    *edge_padding,
+                    *flip,
+                    *no_flip,
+                ),
+                visible: *visible,
+                interactive: *interactive,
+                keyboard_focus: *keyboard_focus,
+                z_index: *z_index,
+            },
+        },
+        Msg::UnregisterCursorOverlay { overlay_id } => Request::UnregisterCursorOverlay {
+            overlay_id: overlay_id.clone(),
         },
     };
 
@@ -672,6 +767,64 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                 println!();
             }
         }
+        Msg::RemoteWindows => {
+            let Response::RemoteWindows(mut windows) = response else {
+                bail!("unexpected response: expected RemoteWindows, got {response:?}");
+            };
+
+            if json {
+                let windows =
+                    serde_json::to_string(&windows).context("error formatting response")?;
+                println!("{windows}");
+                return Ok(());
+            }
+
+            if windows.is_empty() {
+                println!("No remote windows.");
+                return Ok(());
+            }
+
+            windows.sort_by_key(|window| window.id);
+            for window in windows {
+                println!(
+                    "Remote window {}: peer={} remote={} title={:?} app_id={:?} size={}x{} stream={}{}",
+                    window.id,
+                    window.peer_id,
+                    window.remote_window_id,
+                    window.title,
+                    window.app_id,
+                    window.size.0,
+                    window.size.1,
+                    window.stream_id,
+                    if window.is_focused { " focused" } else { "" },
+                );
+            }
+        }
+        Msg::SharedWindowStreams => {
+            let Response::SharedWindowStreams(mut streams) = response else {
+                bail!("unexpected response: expected SharedWindowStreams, got {response:?}");
+            };
+
+            if json {
+                let streams =
+                    serde_json::to_string(&streams).context("error formatting response")?;
+                println!("{streams}");
+                return Ok(());
+            }
+
+            if streams.is_empty() {
+                println!("No shared window streams.");
+                return Ok(());
+            }
+
+            streams.sort_by_key(|stream| stream.window_id);
+            for stream in streams {
+                println!(
+                    "Shared window {}: stream={}",
+                    stream.window_id, stream.stream_id
+                );
+            }
+        }
         Msg::VirtualCursors => {
             let Response::VirtualCursors(mut cursors) = response else {
                 bail!("unexpected response: expected VirtualCursors, got {response:?}");
@@ -716,6 +869,15 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
 
             println!("Created virtual cursor {}.", cursor.cursor_id);
         }
+        Msg::SetHardwareCursor { .. } | Msg::ClearHardwareCursor => {
+            let Response::Handled = response else {
+                bail!("unexpected response: expected Handled, got {response:?}");
+            };
+
+            if json {
+                println!("{}", json!({ "ok": true }));
+            }
+        }
         Msg::UpdateVirtualCursor { .. } => {
             let Response::VirtualCursorUpdated(cursor) = response else {
                 bail!("unexpected response: expected VirtualCursorUpdated, got {response:?}");
@@ -743,9 +905,152 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
 
             println!("Destroyed virtual cursor {cursor_id}.");
         }
+        Msg::CursorOverlays => {
+            let Response::CursorOverlays(mut overlays) = response else {
+                bail!("unexpected response: expected CursorOverlays, got {response:?}");
+            };
+
+            if json {
+                let overlays =
+                    serde_json::to_string(&overlays).context("error formatting response")?;
+                println!("{overlays}");
+                return Ok(());
+            }
+
+            if overlays.is_empty() {
+                println!("No cursor overlays.");
+                return Ok(());
+            }
+
+            overlays.sort_by(|a, b| a.overlay_id.cmp(&b.overlay_id));
+            for overlay in overlays {
+                let anchor = match &overlay.anchor {
+                    CursorOverlayAnchor::HardwarePointer => "hardware pointer".to_owned(),
+                    CursorOverlayAnchor::VirtualCursor { cursor_id } => {
+                        format!("virtual cursor {cursor_id}")
+                    }
+                };
+                let resolved = overlay
+                    .resolved_output
+                    .as_deref()
+                    .map(|output| format!(" on {output}"))
+                    .unwrap_or_default();
+                println!(
+                    "{}: namespace \"{}\", anchored to {}, {:?}/{:?}, visible {}, interactive {}, keyboard-focus {}{}",
+                    overlay.overlay_id,
+                    overlay.layer_namespace,
+                    anchor,
+                    overlay.placement.side,
+                    overlay.placement.align,
+                    overlay.visible,
+                    overlay.interactive,
+                    overlay.keyboard_focus,
+                    resolved
+                );
+            }
+        }
+        Msg::RegisterCursorOverlay { .. } => {
+            let Response::CursorOverlayRegistered(overlay) = response else {
+                bail!("unexpected response: expected CursorOverlayRegistered, got {response:?}");
+            };
+
+            if json {
+                let overlay =
+                    serde_json::to_string(&overlay).context("error formatting response")?;
+                println!("{overlay}");
+                return Ok(());
+            }
+
+            println!("Registered cursor overlay {}.", overlay.overlay_id);
+        }
+        Msg::UpdateCursorOverlay { .. } => {
+            let Response::CursorOverlayUpdated(overlay) = response else {
+                bail!("unexpected response: expected CursorOverlayUpdated, got {response:?}");
+            };
+
+            if json {
+                let overlay =
+                    serde_json::to_string(&overlay).context("error formatting response")?;
+                println!("{overlay}");
+                return Ok(());
+            }
+
+            println!("Updated cursor overlay {}.", overlay.overlay_id);
+        }
+        Msg::UnregisterCursorOverlay { .. } => {
+            let Response::CursorOverlayUnregistered { overlay_id } = response else {
+                bail!("unexpected response: expected CursorOverlayUnregistered, got {response:?}");
+            };
+
+            if json {
+                let response =
+                    serde_json::to_string(&overlay_id).context("error formatting response")?;
+                println!("{response}");
+                return Ok(());
+            }
+
+            println!("Unregistered cursor overlay {overlay_id}.");
+        }
     }
 
     Ok(())
+}
+
+fn cursor_overlay_anchor(
+    hardware_pointer: bool,
+    virtual_cursor: &Option<String>,
+) -> anyhow::Result<CursorOverlayAnchor> {
+    cursor_overlay_anchor_opt(hardware_pointer, virtual_cursor)?
+        .ok_or_else(|| anyhow!("must specify --anchor-hardware-pointer or --anchor-virtual-cursor"))
+}
+
+fn cursor_overlay_anchor_opt(
+    hardware_pointer: bool,
+    virtual_cursor: &Option<String>,
+) -> anyhow::Result<Option<CursorOverlayAnchor>> {
+    match (hardware_pointer, virtual_cursor) {
+        (true, None) => Ok(Some(CursorOverlayAnchor::HardwarePointer)),
+        (false, Some(cursor_id)) => Ok(Some(CursorOverlayAnchor::VirtualCursor {
+            cursor_id: cursor_id.clone(),
+        })),
+        (false, None) => Ok(None),
+        (true, Some(_)) => bail!("cannot specify both hardware and virtual cursor anchors"),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cursor_overlay_placement_opt(
+    side: Option<niri_ipc::CursorOverlaySide>,
+    align: Option<niri_ipc::CursorOverlayAlign>,
+    gap: Option<f64>,
+    offset_x: Option<f64>,
+    offset_y: Option<f64>,
+    edge_padding: Option<f64>,
+    flip: bool,
+    no_flip: bool,
+) -> Option<CursorOverlayPlacement> {
+    if side.is_none()
+        && align.is_none()
+        && gap.is_none()
+        && offset_x.is_none()
+        && offset_y.is_none()
+        && edge_padding.is_none()
+        && !flip
+        && !no_flip
+    {
+        return None;
+    }
+
+    let default = CursorOverlayPlacement::default();
+    Some(CursorOverlayPlacement {
+        side: side.unwrap_or(default.side),
+        align: align.unwrap_or(default.align),
+        gap: gap.unwrap_or(default.gap),
+        offset_x: offset_x.unwrap_or(default.offset_x),
+        offset_y: offset_y.unwrap_or(default.offset_y),
+        edge_padding: edge_padding.unwrap_or(default.edge_padding),
+        flip: if no_flip { false } else { flip || default.flip },
+    })
 }
 
 fn print_output(output: Output) -> anyhow::Result<()> {
@@ -1007,6 +1312,11 @@ fn virtual_cursor_source(
         (!theme.is_empty()).then_some(theme)
     });
     VirtualCursorSource::Theme { theme, icon }
+}
+
+fn non_empty_string(value: String) -> Option<String> {
+    let value = value.trim().to_owned();
+    (!value.is_empty()).then_some(value)
 }
 
 fn parse_rgba_color_opt(color: Option<&str>) -> anyhow::Result<Option<RgbaColor>> {

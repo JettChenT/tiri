@@ -59,6 +59,9 @@ impl WlrLayerShellHandler for State {
                 layer.map(|layer| (o.clone(), map, layer))
             }) {
             map.unmap_layer(&layer);
+            self.niri
+                .cursor_overlay_ui
+                .remove_namespace(layer.namespace());
             self.niri.mapped_layer_surfaces.remove(&layer);
             Some(output)
         } else {

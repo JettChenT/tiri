@@ -21,13 +21,14 @@ use smithay::backend::libinput::LibinputInputBackend;
 use smithay::desktop::WindowSurfaceType;
 use smithay::input::dnd::DnDGrab;
 use smithay::input::keyboard::{
-    keysyms, FilterResult, KeyboardHandle, Keysym, Layout, ModifiersState,
+    keysyms, xkb, FilterResult, KeyboardHandle, Keysym, Layout, ModifiersState,
 };
 use smithay::input::pointer::{
     AxisFrame, ButtonEvent, CursorIcon, CursorImageStatus, Focus, GestureHoldBeginEvent,
     GestureHoldEndEvent, GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent,
     GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent,
-    GrabStartData as PointerGrabStartData, MotionEvent, PointerGrab, RelativeMotionEvent,
+    GrabStartData as PointerGrabStartData, MotionEvent, PointerGrab, PointerHandle,
+    RelativeMotionEvent,
 };
 use smithay::input::touch::{
     DownEvent, GrabStartData as TouchGrabStartData, MotionEvent as TouchMotionEvent, UpEvent,
@@ -958,6 +959,48 @@ impl State {
                     warn!("failed to send CUA key to window {id}: {err}");
                 }
             }
+            Action::ShareWindowStream { id, stream_id } => {
+                if let Err(err) = self.niri.share_window_stream(id, stream_id) {
+                    warn!("failed to share window stream for {id}: {err}");
+                } else {
+                    self.set_dynamic_cast_target(CastTarget::Window { id });
+                }
+            }
+            Action::StopWindowStream { id } => {
+                self.niri.stop_window_stream(id);
+            }
+            Action::OpenRemoteWindow {
+                peer_id,
+                remote_window_id,
+                remote_workspace_id,
+                title,
+                app_id,
+                width,
+                height,
+                stream_id,
+            } => {
+                let id = self.niri.open_remote_window(
+                    peer_id,
+                    remote_window_id,
+                    remote_workspace_id,
+                    title,
+                    app_id,
+                    width,
+                    height,
+                    stream_id,
+                );
+                if let Err(err) = self.niri.focus_remote_window(id) {
+                    warn!("failed to focus remote window {id}: {err}");
+                }
+            }
+            Action::FocusRemoteWindow { id } => {
+                if let Err(err) = self.niri.focus_remote_window(id) {
+                    warn!("failed to focus remote window {id}: {err}");
+                }
+            }
+            Action::CloseRemoteWindow { id } => {
+                self.niri.close_remote_window(id);
+            }
             Action::VirtualCursorMove {
                 cursor_id,
                 x,
@@ -1673,6 +1716,27 @@ impl State {
                 if let Some(res) = self.niri.find_output_and_workspace_index(reference) {
                     let new_idx = new_idx.saturating_sub(1);
                     self.niri.layout.move_workspace_to_idx(Some(res), new_idx);
+                    // FIXME: granular
+                    self.niri.queue_redraw_all();
+                }
+            }
+            Action::AddNamedWorkspace {
+                name,
+                reference,
+                position,
+                focus,
+            } => {
+                if self
+                    .niri
+                    .layout
+                    .add_named_workspace(name, reference, position, focus)
+                {
+                    // FIXME: granular
+                    self.niri.queue_redraw_all();
+                }
+            }
+            Action::RemoveWorkspace(reference) => {
+                if self.niri.layout.remove_workspace(reference) {
                     // FIXME: granular
                     self.niri.queue_redraw_all();
                 }
@@ -2552,6 +2616,8 @@ impl State {
                 y,
                 width,
                 height,
+                description,
+                backdrop_opacity,
                 output,
             } => {
                 let old_output = self.niri.window_preview_ui.output().cloned();
@@ -2581,6 +2647,8 @@ impl State {
                                 mapped,
                                 preview_output.clone(),
                                 geo,
+                                description,
+                                backdrop_opacity,
                             );
                             Some(preview_output)
                         } else {
@@ -2636,13 +2704,41 @@ impl State {
         Some((surface, pos_within_surface))
     }
 
+    fn use_cua_seat_for_surface(&self, surface: &WlSurface) -> bool {
+        let Some(client) = self.niri.display_handle.get_client(surface.id()).ok() else {
+            return false;
+        };
+
+        let has_pointer = self
+            .niri
+            .cua_seat
+            .get_pointer()
+            .map(|pointer| {
+                let has_pointer = pointer.client_pointers(&client).next().is_some();
+                has_pointer
+            })
+            .unwrap_or(false);
+        let has_keyboard = self
+            .niri
+            .cua_seat
+            .get_keyboard()
+            .map(|keyboard| {
+                let has_keyboard = keyboard.client_keyboards(&client).next().is_some();
+                has_keyboard
+            })
+            .unwrap_or(false);
+
+        has_pointer && has_keyboard
+    }
+
     fn restore_pointer_focus(
         &mut self,
+        pointer: &PointerHandle<Self>,
+        update_primary_pointer_contents: bool,
         old_location: Point<f64, Logical>,
         old_focus: Option<(WlSurface, Point<f64, Logical>)>,
         time: u32,
     ) {
-        let pointer = self.niri.seat.get_pointer().unwrap();
         pointer.motion(
             self,
             old_focus,
@@ -2653,11 +2749,15 @@ impl State {
             },
         );
         pointer.frame(self);
-        self.niri.pointer_contents = self.niri.contents_under(old_location);
+        if update_primary_pointer_contents {
+            self.niri.pointer_contents = self.niri.contents_under(old_location);
+        }
     }
 
     fn cua_motion_to_target(
         &mut self,
+        pointer: &PointerHandle<Self>,
+        update_primary_pointer_contents: bool,
         surface: WlSurface,
         pos_within_surface: Point<f64, Logical>,
         time: u32,
@@ -2665,9 +2765,10 @@ impl State {
         Point<f64, Logical>,
         Option<(WlSurface, Point<f64, Logical>)>,
     ) {
-        let pointer = self.niri.seat.get_pointer().unwrap();
         let old_location = pointer.current_location();
-        let old_focus = self.niri.contents_under(old_location).surface;
+        let old_focus = update_primary_pointer_contents
+            .then(|| self.niri.contents_under(old_location).surface)
+            .flatten();
         let target_origin = old_location - pos_within_surface;
 
         pointer.motion(
@@ -2694,9 +2795,14 @@ impl State {
             return false;
         };
         let time = get_monotonic_time().as_millis() as u32;
+        let use_cua_seat = self.use_cua_seat_for_surface(&surface);
+        let pointer = if use_cua_seat {
+            self.niri.cua_seat.get_pointer().unwrap()
+        } else {
+            self.niri.seat.get_pointer().unwrap()
+        };
         let (old_location, old_focus) =
-            self.cua_motion_to_target(surface, pos_within_surface, time);
-        let pointer = self.niri.seat.get_pointer().unwrap();
+            self.cua_motion_to_target(&pointer, !use_cua_seat, surface, pos_within_surface, time);
 
         for _ in 0..count {
             pointer.button(
@@ -2720,7 +2826,7 @@ impl State {
         }
         pointer.frame(self);
 
-        self.restore_pointer_focus(old_location, old_focus, time);
+        self.restore_pointer_focus(&pointer, !use_cua_seat, old_location, old_focus, time);
         true
     }
 
@@ -2740,9 +2846,14 @@ impl State {
             return false;
         };
         let time = get_monotonic_time().as_millis() as u32;
+        let use_cua_seat = self.use_cua_seat_for_surface(&surface);
+        let pointer = if use_cua_seat {
+            self.niri.cua_seat.get_pointer().unwrap()
+        } else {
+            self.niri.seat.get_pointer().unwrap()
+        };
         let (old_location, old_focus) =
-            self.cua_motion_to_target(surface, pos_within_surface, time);
-        let pointer = self.niri.seat.get_pointer().unwrap();
+            self.cua_motion_to_target(&pointer, !use_cua_seat, surface, pos_within_surface, time);
         let mut frame = AxisFrame::new(time).source(AxisSource::Wheel);
 
         if scroll_x != 0 {
@@ -2759,20 +2870,12 @@ impl State {
         pointer.axis(self, frame);
         pointer.frame(self);
 
-        self.restore_pointer_focus(old_location, old_focus, time);
+        self.restore_pointer_focus(&pointer, !use_cua_seat, old_location, old_focus, time);
         true
     }
 
     fn cua_type_text(&mut self, id: u64, text: &str) -> Result<(), String> {
-        let keys = text
-            .chars()
-            .map(|c| {
-                char_to_keycodes(c)
-                    .ok_or_else(|| format!("unsupported character for CUA typing: {c:?}"))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        self.cua_send_keys(id, keys)
+        self.cua_send_text(id, text)
     }
 
     fn cua_press_key(&mut self, id: u64, key: &str) -> Result<(), String> {
@@ -2780,6 +2883,24 @@ impl State {
             .ok_or_else(|| format!("unsupported key for CUA key press: {key:?}"))?;
 
         self.cua_send_keys(id, vec![keycodes])
+    }
+
+    fn cua_send_text(&mut self, id: u64, text: &str) -> Result<(), String> {
+        let target = {
+            let mut windows = self.niri.layout.windows();
+            let (_, mapped) = windows
+                .find(|(_, mapped)| mapped.id().get() == id)
+                .ok_or_else(|| format!("window {id} not found"))?;
+            mapped.toplevel().wl_surface().clone()
+        };
+        let use_cua_seat = self.use_cua_seat_for_surface(&target);
+        let keyboard = if use_cua_seat {
+            self.niri.cua_seat.get_keyboard().unwrap()
+        } else {
+            self.niri.seat.get_keyboard().unwrap()
+        };
+        let keys = self.cua_text_keycodes(&keyboard, text)?;
+        self.cua_send_keys_to_target(keyboard, target, keys)
     }
 
     fn cua_send_keys(&mut self, id: u64, keys: Vec<Vec<Keycode>>) -> Result<(), String> {
@@ -2790,20 +2911,21 @@ impl State {
                 .ok_or_else(|| format!("window {id} not found"))?;
             mapped.toplevel().wl_surface().clone()
         };
-        let target_client = self.niri.display_handle.get_client(target.id()).ok();
-        let use_cua_seat = target_client
-            .as_ref()
-            .and_then(|client| {
-                let keyboard = self.niri.cua_seat.get_keyboard()?;
-                let has_keyboard = keyboard.client_keyboards(client).next().is_some();
-                Some(has_keyboard)
-            })
-            .unwrap_or(false);
+        let use_cua_seat = self.use_cua_seat_for_surface(&target);
         let keyboard = if use_cua_seat {
             self.niri.cua_seat.get_keyboard().unwrap()
         } else {
             self.niri.seat.get_keyboard().unwrap()
         };
+        self.cua_send_keys_to_target(keyboard, target, keys)
+    }
+
+    fn cua_send_keys_to_target(
+        &mut self,
+        keyboard: KeyboardHandle<Self>,
+        target: WlSurface,
+        keys: Vec<Vec<Keycode>>,
+    ) -> Result<(), String> {
         let old_focus = keyboard.current_focus();
         let time = get_monotonic_time().as_millis() as u32;
 
@@ -2821,6 +2943,23 @@ impl State {
         }
         keyboard.set_focus(self, old_focus, SERIAL_COUNTER.next_serial());
         Ok(())
+    }
+
+    fn cua_text_keycodes(
+        &mut self,
+        keyboard: &KeyboardHandle<Self>,
+        text: &str,
+    ) -> Result<Vec<Vec<Keycode>>, String> {
+        keyboard.with_xkb_state(self, |context| {
+            let xkb = context.xkb().lock().unwrap();
+            text.chars()
+                .map(|c| {
+                    xkb_char_to_keycodes(&xkb, c)
+                        .or_else(|| ascii_char_to_keycodes(c))
+                        .ok_or_else(|| format!("unsupported character for CUA typing: {c:?}"))
+                })
+                .collect()
+        })
     }
 
     fn cua_key(
@@ -5527,73 +5666,166 @@ fn keycode(evdev_code: u32) -> Keycode {
     Keycode::from(evdev_code + 8)
 }
 
-fn char_to_keycodes(c: char) -> Option<Vec<Keycode>> {
+fn xkb_char_to_keycodes(xkb: &smithay::input::keyboard::Xkb, c: char) -> Option<Vec<Keycode>> {
+    let target = char_to_keysym(c)?;
+    let keymap = unsafe { xkb.keymap() };
+    let layout = xkb.active_layout().0;
+    let shift_mask = modifier_mask(keymap, xkb::MOD_NAME_SHIFT);
+    let shift_key = modifier_keycode(keymap, layout, Keysym::Shift_L)
+        .or_else(|| modifier_keycode(keymap, layout, Keysym::Shift_R));
+    let mut unmodified = None;
+    let mut shifted = None;
+
+    keymap.key_for_each(|keymap, key| {
+        if unmodified.is_some() && shifted.is_some() {
+            return;
+        }
+        let levels = keymap.num_levels_for_key(key, layout);
+        for level in 0..levels {
+            let syms = keymap.key_get_syms_by_level(key, layout, level);
+            if !syms.contains(&target) {
+                continue;
+            }
+
+            let mut masks = [0; 16];
+            let count = keymap.key_get_mods_for_level(key, layout, level, &mut masks);
+            let masks = &masks[..count];
+            if masks.contains(&0) {
+                unmodified = Some(vec![key]);
+                return;
+            }
+            if let (Some(shift_key), Some(shift_mask)) = (shift_key, shift_mask) {
+                if masks.contains(&shift_mask) {
+                    shifted = Some(vec![shift_key, key]);
+                }
+            }
+        }
+    });
+
+    unmodified.or(shifted)
+}
+
+fn char_to_keysym(c: char) -> Option<Keysym> {
+    match c {
+        '\n' | '\r' => Some(Keysym::Return),
+        '\t' => Some(Keysym::Tab),
+        c if c.is_ascii_graphic() || c == ' ' => Some(Keysym::new(c as u32)),
+        _ => None,
+    }
+}
+
+fn modifier_mask(keymap: &xkb::Keymap, name: &str) -> Option<xkb::ModMask> {
+    let index = keymap.mod_get_index(name);
+    if index == xkb::MOD_INVALID {
+        None
+    } else {
+        Some(1 << index)
+    }
+}
+
+fn modifier_keycode(
+    keymap: &xkb::Keymap,
+    layout: xkb::LayoutIndex,
+    keysym: Keysym,
+) -> Option<Keycode> {
+    let mut result = None;
+    keymap.key_for_each(|keymap, key| {
+        if result.is_some() {
+            return;
+        }
+        if keymap
+            .key_get_syms_by_level(key, layout, 0)
+            .contains(&keysym)
+        {
+            result = Some(key);
+        }
+    });
+    result
+}
+
+fn ascii_char_to_keycodes(c: char) -> Option<Vec<Keycode>> {
     const KEY_LEFTSHIFT: u32 = 42;
 
     let mut keys = Vec::new();
-    if c.is_ascii_uppercase() {
-        keys.push(keycode(KEY_LEFTSHIFT));
-    }
 
-    let code = match c.to_ascii_lowercase() {
-        'a' => 30,
-        'b' => 48,
-        'c' => 46,
-        'd' => 32,
-        'e' => 18,
-        'f' => 33,
-        'g' => 34,
-        'h' => 35,
-        'i' => 23,
-        'j' => 36,
-        'k' => 37,
-        'l' => 38,
-        'm' => 50,
-        'n' => 49,
-        'o' => 24,
-        'p' => 25,
-        'q' => 16,
-        'r' => 19,
-        's' => 31,
-        't' => 20,
-        'u' => 22,
-        'v' => 47,
-        'w' => 17,
-        'x' => 45,
-        'y' => 21,
-        'z' => 44,
-        '1' => 2,
-        '2' => 3,
-        '3' => 4,
-        '4' => 5,
-        '5' => 6,
-        '6' => 7,
-        '7' => 8,
-        '8' => 9,
-        '9' => 10,
-        '0' => 11,
-        ' ' => 57,
-        '\n' => 28,
-        '.' => 52,
-        ',' => 51,
-        '-' => 12,
-        '/' => 53,
-        ';' => 39,
-        '_' => {
-            keys.push(keycode(KEY_LEFTSHIFT));
-            12
-        }
-        '?' => {
-            keys.push(keycode(KEY_LEFTSHIFT));
-            53
-        }
-        ':' => {
-            keys.push(keycode(KEY_LEFTSHIFT));
-            39
-        }
+    let (shift, code) = match c {
+        'a' | 'A' => (c.is_ascii_uppercase(), 30),
+        'b' | 'B' => (c.is_ascii_uppercase(), 48),
+        'c' | 'C' => (c.is_ascii_uppercase(), 46),
+        'd' | 'D' => (c.is_ascii_uppercase(), 32),
+        'e' | 'E' => (c.is_ascii_uppercase(), 18),
+        'f' | 'F' => (c.is_ascii_uppercase(), 33),
+        'g' | 'G' => (c.is_ascii_uppercase(), 34),
+        'h' | 'H' => (c.is_ascii_uppercase(), 35),
+        'i' | 'I' => (c.is_ascii_uppercase(), 23),
+        'j' | 'J' => (c.is_ascii_uppercase(), 36),
+        'k' | 'K' => (c.is_ascii_uppercase(), 37),
+        'l' | 'L' => (c.is_ascii_uppercase(), 38),
+        'm' | 'M' => (c.is_ascii_uppercase(), 50),
+        'n' | 'N' => (c.is_ascii_uppercase(), 49),
+        'o' | 'O' => (c.is_ascii_uppercase(), 24),
+        'p' | 'P' => (c.is_ascii_uppercase(), 25),
+        'q' | 'Q' => (c.is_ascii_uppercase(), 16),
+        'r' | 'R' => (c.is_ascii_uppercase(), 19),
+        's' | 'S' => (c.is_ascii_uppercase(), 31),
+        't' | 'T' => (c.is_ascii_uppercase(), 20),
+        'u' | 'U' => (c.is_ascii_uppercase(), 22),
+        'v' | 'V' => (c.is_ascii_uppercase(), 47),
+        'w' | 'W' => (c.is_ascii_uppercase(), 17),
+        'x' | 'X' => (c.is_ascii_uppercase(), 45),
+        'y' | 'Y' => (c.is_ascii_uppercase(), 21),
+        'z' | 'Z' => (c.is_ascii_uppercase(), 44),
+        '1' => (false, 2),
+        '2' => (false, 3),
+        '3' => (false, 4),
+        '4' => (false, 5),
+        '5' => (false, 6),
+        '6' => (false, 7),
+        '7' => (false, 8),
+        '8' => (false, 9),
+        '9' => (false, 10),
+        '0' => (false, 11),
+        '!' => (true, 2),
+        '@' => (true, 3),
+        '#' => (true, 4),
+        '$' => (true, 5),
+        '%' => (true, 6),
+        '^' => (true, 7),
+        '&' => (true, 8),
+        '*' => (true, 9),
+        '(' => (true, 10),
+        ')' => (true, 11),
+        ' ' => (false, 57),
+        '\n' | '\r' => (false, 28),
+        '\t' => (false, 15),
+        '-' => (false, 12),
+        '_' => (true, 12),
+        '=' => (false, 13),
+        '+' => (true, 13),
+        '[' => (false, 26),
+        '{' => (true, 26),
+        ']' => (false, 27),
+        '}' => (true, 27),
+        '\\' => (false, 43),
+        '|' => (true, 43),
+        ';' => (false, 39),
+        ':' => (true, 39),
+        '\'' => (false, 40),
+        '"' => (true, 40),
+        '`' => (false, 41),
+        '~' => (true, 41),
+        ',' => (false, 51),
+        '<' => (true, 51),
+        '.' => (false, 52),
+        '>' => (true, 52),
+        '/' => (false, 53),
+        '?' => (true, 53),
         _ => return None,
     };
 
+    if shift {
+        keys.push(keycode(KEY_LEFTSHIFT));
+    }
     keys.push(keycode(code));
     Some(keys)
 }
@@ -5648,6 +5880,29 @@ mod tests {
 
     use super::*;
     use crate::animation::Clock;
+
+    #[test]
+    fn ascii_typing_fallback_covers_printable_punctuation() {
+        let cases = [
+            ('\'', vec![keycode(40)]),
+            ('"', vec![keycode(42), keycode(40)]),
+            ('[', vec![keycode(26)]),
+            (']', vec![keycode(27)]),
+            ('{', vec![keycode(42), keycode(26)]),
+            ('}', vec![keycode(42), keycode(27)]),
+            ('=', vec![keycode(13)]),
+            ('+', vec![keycode(42), keycode(13)]),
+            ('`', vec![keycode(41)]),
+            ('~', vec![keycode(42), keycode(41)]),
+            ('@', vec![keycode(42), keycode(3)]),
+            ('\\', vec![keycode(43)]),
+            ('|', vec![keycode(42), keycode(43)]),
+        ];
+
+        for (ch, expected) in cases {
+            assert_eq!(ascii_char_to_keycodes(ch), Some(expected), "{ch:?}");
+        }
+    }
 
     #[test]
     fn bindings_suppress_keys() {
