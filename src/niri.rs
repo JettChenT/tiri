@@ -4550,8 +4550,8 @@ impl Niri {
             .render_output(self, output, ctx.r(), &mut |elem| push(elem.into()));
 
         // Then, compositor-rendered virtual cursors pinned to mapped windows. These are part of
-        // the normal desktop render only, below compositor UI and the hardware pointer.
-        if ctx.target == RenderTarget::Output {
+        // the visible desktop render, below compositor UI and the hardware pointer.
+        if ctx.target.shows_cursor_attached_ui() {
             self.virtual_cursor_ui.render_output(
                 self,
                 ctx.renderer,
@@ -4564,7 +4564,7 @@ impl Niri {
         // Then, cursor-anchored client overlays. They are regular layer-shell surfaces whose
         // compositor placement is driven by the hardware pointer or a virtual cursor. This render
         // list is top-to-bottom, so virtual cursors stay visible above their overlays.
-        if ctx.target == RenderTarget::Output {
+        if ctx.target.shows_cursor_attached_ui() {
             let layer_map = layer_map_for_output(output);
             self.cursor_overlay_ui
                 .render_output(self, output, &layer_map, ctx.r(), &mut |elem| {

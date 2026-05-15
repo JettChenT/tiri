@@ -117,6 +117,13 @@ pub trait ToRenderElement {
 impl RenderTarget {
     pub const COUNT: usize = 3;
 
+    pub fn shows_cursor_attached_ui(self) -> bool {
+        matches!(
+            self,
+            RenderTarget::Output | RenderTarget::Screencast | RenderTarget::ScreenCapture
+        )
+    }
+
     pub fn should_block_out(self, block_out_from: Option<BlockOutFrom>) -> bool {
         match block_out_from {
             None => false,
